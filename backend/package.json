@@ -6,7 +6,7 @@
   "description": "Backend service for BOC exchange rate monitoring",
   "main": "server.js",
   "scripts": {
-    "dev": "nodemon server.js",
+    "dev": "nodemon --config nodemon.json server.js",
     "start": "node server.js"
   },
   "dependencies": {
