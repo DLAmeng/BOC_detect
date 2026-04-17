@@ -70,3 +70,13 @@ export const createErrorAlert = (currency: string, errorMessage: string): AlertL
         message: `[BOC ${currency}/CNY 监控异常]\n原因: ${errorMessage}\n抓取时间: ${format(new Date(), 'yyyy-MM-dd HH:mm:ss')}`
     };
 };
+
+export const createInfoAlert = (message: string): AlertLog => {
+    return {
+        id: generateId(),
+        type: 'info',
+        timestamp: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+        read: false,
+        message
+    };
+};

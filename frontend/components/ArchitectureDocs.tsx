@@ -23,7 +23,7 @@ export const ArchitectureDocs: React.FC = () => {
                         <p className="text-gray-500 mt-2"># 或者使用 Docker Compose</p>
                         <p className="text-green-400">docker compose up --build</p>
                     </div>
-                    <p>后端健康检查地址为 <code>/api/health</code>，前端启动监控后会周期性请求真实汇率接口。</p>
+                    <p>后端健康检查地址为 <code>/api/health</code>，历史数据接口为 <code>/api/history</code>，Telegram 通知接口为 <code>/api/notify/telegram</code>。</p>
                 </div>
             </div>
 
@@ -35,7 +35,7 @@ export const ArchitectureDocs: React.FC = () => {
                             1. 数据源 (Node.js / Cheerio)
                         </h3>
                         <p className="text-sm text-gray-400 leading-relaxed">
-                            后端利用 <code>axios</code> 获取中国银行外汇牌价 HTML，并使用 <code>cheerio</code> 解析表格，提取目标币种的“现汇卖出价”和“发布时间”。
+                            后端利用 <code>axios</code> 获取中国银行外汇牌价 HTML，并使用 <code>cheerio</code> 解析表格，提取目标币种的“现汇卖出价”和“发布时间”。抓取结果会被写入本地持久化文件，供图表跨重启加载。
                         </p>
                     </section>
 
@@ -45,7 +45,7 @@ export const ArchitectureDocs: React.FC = () => {
                             2. 前端处理逻辑
                         </h3>
                         <p className="text-sm text-gray-400 leading-relaxed">
-                            前端只调用真实 API，不再生成模拟汇率。中行页面显示的是每 100 外币的价格，因此系统会将 <code>rawSellingRate</code> 除以 100，换算成更直观的 1 外币兑人民币价格。
+                            前端只调用真实 API，不再生成模拟汇率。中行页面显示的是每 100 外币的价格，因此系统会将 <code>rawSellingRate</code> 除以 100，换算成更直观的 1 外币兑人民币价格，并把后端持久化历史与当前会话的新数据合并展示。
                         </p>
                     </section>
                 </div>
@@ -67,7 +67,7 @@ export const ArchitectureDocs: React.FC = () => {
                             4. 通知日志
                         </h3>
                         <p className="text-sm text-gray-400 leading-relaxed">
-                            控制台会记录真实抓取产生的更新、到价与异常消息。若后续接入 Telegram Bot API，这些日志文本可以直接复用为通知内容。
+                            控制台会记录真实抓取产生的更新、到价与异常消息。配置 Telegram 后，到价提醒会直接通过后端发送；异常通知则会在错误信息变化时再发送，避免连续刷屏。
                         </p>
                     </section>
                 </div>

@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { RateData } from '../types.ts';
+import { fetchRateHistory } from '../utils/api.ts';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 
 type TimeRange = 'session' | '10m' | '30m' | '1h' | '6h' | '24h';
@@ -18,19 +19,80 @@ const RANGE_WINDOWS: Record<Exclude<TimeRange, 'session'>, number> = {
     '24h': 24 * 60 * 60 * 1000,
 };
 
+const RANGES: { value: TimeRange; label: string }[] = [
+    { value: 'session', label: '当前会话' },
+    { value: '10m', label: '10 分钟' },
+    { value: '30m', label: '30 分钟' },
+    { value: '1h', label: '1 小时' },
+    { value: '6h', label: '6 小时' },
+    { value: '24h', label: '24 小时' },
+];
+
 export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) => {
     const [timeRange, setTimeRange] = useState<TimeRange>('session');
+    const [persistedHistory, setPersistedHistory] = useState<RateData[]>([]);
+    const [historyError, setHistoryError] = useState<string | null>(null);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+
+    useEffect(() => {
+        let isActive = true;
+
+        const loadHistory = async () => {
+            setIsLoadingHistory(true);
+            try {
+                const items = await fetchRateHistory(currency, 1500);
+                if (isActive) {
+                    setPersistedHistory(items);
+                    setHistoryError(null);
+                }
+            } catch (error: any) {
+                if (isActive) {
+                    setPersistedHistory([]);
+                    setHistoryError(error?.message || '加载历史数据失败');
+                }
+            } finally {
+                if (isActive) {
+                    setIsLoadingHistory(false);
+                }
+            }
+        };
+
+        loadHistory();
+
+        return () => {
+            isActive = false;
+        };
+    }, [currency]);
+
+    const mergedMap = new Map<string, RateData>();
+    [...persistedHistory, ...history].forEach((item) => {
+        const key = `${item.pubTime}-${item.rawSellingRate}`;
+        mergedMap.set(key, item);
+    });
+
+    const mergedHistory = Array.from(mergedMap.values()).sort(
+        (left, right) => left.fetchTimestampMs - right.fetchTimestampMs
+    );
 
     const now = Date.now();
     const displayData =
         timeRange === 'session'
-            ? history
-            : history.filter((item) => now - item.fetchTimestampMs <= RANGE_WINDOWS[timeRange]);
+            ? mergedHistory
+            : mergedHistory.filter((item) => now - item.fetchTimestampMs <= RANGE_WINDOWS[timeRange]);
 
-    if (history.length === 0) {
+    if (isLoadingHistory && mergedHistory.length === 0) {
         return (
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 md:p-6 h-[300px] md:h-[400px] flex items-center justify-center text-gray-500">
+                <span className="text-sm md:text-base">正在从真实后端加载历史汇率...</span>
+            </div>
+        );
+    }
+
+    if (mergedHistory.length === 0) {
+        return (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 md:p-6 h-[300px] md:h-[400px] flex flex-col items-center justify-center text-gray-500">
                 <span className="text-sm md:text-base">等待真实后端返回数据以生成图表...</span>
+                {historyError && <span className="text-xs text-red-400 mt-3">历史数据加载失败：{historyError}</span>}
             </div>
         );
     }
@@ -39,17 +101,10 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
         return (
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 md:p-6 h-[300px] md:h-[400px] flex flex-col justify-center text-gray-500">
                 <div className="flex flex-wrap bg-gray-950 rounded-lg p-1 border border-gray-800 gap-1 mb-6">
-                    {[
-                        { value: 'session', label: '当前会话' },
-                        { value: '10m', label: '10 分钟' },
-                        { value: '30m', label: '30 分钟' },
-                        { value: '1h', label: '1 小时' },
-                        { value: '6h', label: '6 小时' },
-                        { value: '24h', label: '24 小时' },
-                    ].map((range) => (
+                    {RANGES.map((range) => (
                         <button
                             key={range.value}
-                            onClick={() => setTimeRange(range.value as TimeRange)}
+                            onClick={() => setTimeRange(range.value)}
                             className={`flex-1 sm:flex-none px-2 py-1 md:px-3 md:py-1.5 text-[10px] md:text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                                 timeRange === range.value
                                     ? 'bg-blue-600 text-white shadow-sm'
@@ -76,24 +131,16 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
     const minRate = Math.min(...rates, targetRate) - padding;
     const maxRate = Math.max(...rates, targetRate) + padding;
 
-    const ranges: { value: TimeRange; label: string }[] = [
-        { value: 'session', label: '当前会话' },
-        { value: '10m', label: '10 分钟' },
-        { value: '30m', label: '30 分钟' },
-        { value: '1h', label: '1 小时' },
-        { value: '6h', label: '6 小时' },
-        { value: '24h', label: '24 小时' },
-    ];
-
     return (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 md:p-6 h-[350px] md:h-[420px] flex flex-col">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 md:mb-6 gap-3 md:gap-4">
                 <div>
                     <h3 className="text-gray-400 text-xs md:text-sm font-medium">真实汇率采样记录 ({currency})</h3>
-                    <p className="text-[10px] md:text-xs text-gray-500 mt-1">图表仅展示当前会话内从真实后端抓取到的数据，不再生成模拟历史。</p>
+                    <p className="text-[10px] md:text-xs text-gray-500 mt-1">图表会合并后端持久化历史与当前会话内的最新采样数据。</p>
+                    {historyError && <p className="text-[10px] md:text-xs text-red-400 mt-1">历史数据加载失败：{historyError}</p>}
                 </div>
                 <div className="flex flex-wrap bg-gray-950 rounded-lg p-1 border border-gray-800 gap-1 w-full sm:w-auto">
-                    {ranges.map((range) => (
+                    {RANGES.map((range) => (
                         <button
                             key={range.value}
                             onClick={() => setTimeRange(range.value)}

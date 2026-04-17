@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { SystemState, SystemConfig, RateData } from './types.ts';
-import { fetchRealRate } from './utils/api.ts';
-import { processRateData, createErrorAlert } from './utils/alertLogic.ts';
+import { SystemState, SystemConfig, RateData, AlertLog } from './types.ts';
+import { fetchRealRate, sendTelegramNotifications } from './utils/api.ts';
+import { processRateData, createErrorAlert, createInfoAlert } from './utils/alertLogic.ts';
 import { DashboardCard } from './components/DashboardCard.tsx';
 import { RateChart } from './components/RateChart.tsx';
 import { AdminPage } from './components/AdminPage.tsx';
@@ -69,6 +69,30 @@ const App: React.FC = () => {
                 currentState.config,
                 currentState.lastAlertedRate
             );
+            const alertsToStore: AlertLog[] = [...alerts];
+            const targetHitMessages = alerts
+                .filter((alert) => alert.type === 'target_hit')
+                .map((alert) => alert.message);
+
+            if (targetHitMessages.length > 0) {
+                try {
+                    const result = await sendTelegramNotifications({
+                        messages: targetHitMessages,
+                        botToken: currentState.config.telegramBotToken,
+                        chatId: currentState.config.telegramChatId
+                    });
+
+                    if (!result.success && !result.skipped) {
+                        throw new Error(result.reason || '未知错误');
+                    }
+                } catch (telegramError: any) {
+                    alertsToStore.unshift(
+                        createInfoAlert(
+                            `[Telegram] 到价通知发送失败：${telegramError?.message || '未知错误'}`
+                        )
+                    );
+                }
+            }
 
             setState((prev) => {
                 const hasNewPoint =
@@ -83,7 +107,7 @@ const App: React.FC = () => {
                     previousRate: hasNewPoint ? prev.currentRate : prev.previousRate,
                     currentRate: newRateData,
                     history: updatedHistory,
-                    alerts: [...alerts, ...prev.alerts].slice(0, 100),
+                    alerts: [...alertsToStore, ...prev.alerts].slice(0, 100),
                     lastAlertedRate: updatedLastAlertedRate,
                     lastError: null
                 };
@@ -91,10 +115,32 @@ const App: React.FC = () => {
         } catch (error: any) {
             const message = error?.message || '未知错误';
             const errorAlert = createErrorAlert(currentState.config.currency, message);
+            const alertsToStore = [errorAlert];
+
+            if (currentState.lastError !== message) {
+                try {
+                    const result = await sendTelegramNotifications({
+                        messages: [errorAlert.message],
+                        botToken: currentState.config.telegramBotToken,
+                        chatId: currentState.config.telegramChatId
+                    });
+
+                    if (!result.success && !result.skipped) {
+                        throw new Error(result.reason || '未知错误');
+                    }
+                } catch (telegramError: any) {
+                    alertsToStore.unshift(
+                        createInfoAlert(
+                            `[Telegram] 异常通知发送失败：${telegramError?.message || '未知错误'}`
+                        )
+                    );
+                }
+            }
+
             setState((prev) => ({
                 ...prev,
                 lastError: message,
-                alerts: [errorAlert, ...prev.alerts].slice(0, 100)
+                alerts: [...alertsToStore, ...prev.alerts].slice(0, 100)
             }));
         } finally {
             setIsFetching(false);
@@ -127,7 +173,7 @@ const App: React.FC = () => {
                           type: 'info' as const,
                           timestamp: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
                           read: false,
-                          message: `[系统提示] 已切换监控币种为 ${newConfig.currency}，历史数据已重置。`
+                          message: `[系统提示] 已切换监控币种为 ${newConfig.currency}，当前会话数据已重置，图表会重新加载该币种历史记录。`
                       },
                       ...prev.alerts
                   ].slice(0, 100)

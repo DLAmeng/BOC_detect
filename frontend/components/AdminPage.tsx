@@ -58,7 +58,7 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
         <div className="space-y-4 md:space-y-6 max-w-4xl mx-auto pb-8 md:pb-12 animate-in fade-in duration-300">
             <div className="px-1">
                 <h2 className="text-xl md:text-2xl font-bold text-white mb-1 md:mb-2">系统管理与配置</h2>
-                <p className="text-gray-400 text-xs md:text-sm">当前版本仅连接真实后端服务，不再生成任何模拟汇率数据。</p>
+                <p className="text-gray-400 text-xs md:text-sm">当前版本仅连接真实后端服务，不再生成任何模拟汇率数据；历史采样会由后端持久化保存。</p>
             </div>
 
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 md:p-6 shadow-sm">
@@ -156,6 +156,7 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                             placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
                             className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 transition-colors"
                         />
+                        <p className="text-[10px] md:text-xs text-gray-500 mt-1.5 md:mt-2">用于发送到价提醒；若后端已配置环境变量，这里可以留空。</p>
                     </div>
                     <div>
                         <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">Telegram 聊天 ID</label>
@@ -167,6 +168,7 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                             placeholder="@mychannel 或 123456789"
                             className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 transition-colors"
                         />
+                        <p className="text-[10px] md:text-xs text-gray-500 mt-1.5 md:mt-2">系统会优先发送到价提醒；同一错误只会在错误信息变化时再次通知。</p>
                     </div>
                 </div>
             </div>
