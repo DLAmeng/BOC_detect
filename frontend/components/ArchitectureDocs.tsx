@@ -1,0 +1,77 @@
+import React from 'react';
+import { FileText, Server, Code, Database, Bell, Terminal } from 'lucide-react';
+
+export const ArchitectureDocs: React.FC = () => {
+    return (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mt-6">
+            <div className="flex items-center gap-2 mb-6 border-b border-gray-800 pb-4">
+                <FileText className="w-6 h-6 text-blue-400" />
+                <h2 className="text-xl font-bold text-white">系统架构与运行指南</h2>
+            </div>
+
+            <div className="mb-8 bg-blue-900/20 border border-blue-800/50 rounded-lg p-5">
+                <h3 className="text-lg font-semibold text-blue-300 mb-3 flex items-center gap-2">
+                    <Terminal className="w-5 h-5" />
+                    如何运行真实后端服务？
+                </h3>
+                <div className="text-sm text-blue-100 space-y-3 leading-relaxed">
+                    <p>当前版本只有一套真实数据链路：前端调用 `/api/rates`，Node.js 后端实时抓取中国银行官网汇率。</p>
+                    <div className="bg-gray-950 p-4 rounded border border-gray-800 font-mono text-xs text-gray-300 space-y-2">
+                        <p className="text-gray-500"># 本地开发</p>
+                        <p className="text-green-400">npm install</p>
+                        <p className="text-green-400">npm run dev</p>
+                        <p className="text-gray-500 mt-2"># 或者使用 Docker Compose</p>
+                        <p className="text-green-400">docker compose up --build</p>
+                    </div>
+                    <p>后端健康检查地址为 <code>/api/health</code>，前端启动监控后会周期性请求真实汇率接口。</p>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-6">
+                    <section>
+                        <h3 className="text-lg font-semibold text-gray-200 mb-2 flex items-center gap-2">
+                            <Server className="w-4 h-4 text-gray-400" />
+                            1. 数据源 (Node.js / Cheerio)
+                        </h3>
+                        <p className="text-sm text-gray-400 leading-relaxed">
+                            后端利用 <code>axios</code> 获取中国银行外汇牌价 HTML，并使用 <code>cheerio</code> 解析表格，提取目标币种的“现汇卖出价”和“发布时间”。
+                        </p>
+                    </section>
+
+                    <section>
+                        <h3 className="text-lg font-semibold text-gray-200 mb-2 flex items-center gap-2">
+                            <Code className="w-4 h-4 text-gray-400" />
+                            2. 前端处理逻辑
+                        </h3>
+                        <p className="text-sm text-gray-400 leading-relaxed">
+                            前端只调用真实 API，不再生成模拟汇率。中行页面显示的是每 100 外币的价格，因此系统会将 <code>rawSellingRate</code> 除以 100，换算成更直观的 1 外币兑人民币价格。
+                        </p>
+                    </section>
+                </div>
+
+                <div className="space-y-6">
+                    <section>
+                        <h3 className="text-lg font-semibold text-gray-200 mb-2 flex items-center gap-2">
+                            <Database className="w-4 h-4 text-gray-400" />
+                            3. 状态管理 (防刷屏机制)
+                        </h3>
+                        <p className="text-sm text-gray-400 leading-relaxed">
+                            系统会记录 <code>lastAlertedRate</code>。当价格跌破阈值时触发提醒，只有价格继续创新低，或先回升到阈值上方后再次跌破，才会发送新的到价通知。
+                        </p>
+                    </section>
+
+                    <section>
+                        <h3 className="text-lg font-semibold text-gray-200 mb-2 flex items-center gap-2">
+                            <Bell className="w-4 h-4 text-gray-400" />
+                            4. 通知日志
+                        </h3>
+                        <p className="text-sm text-gray-400 leading-relaxed">
+                            控制台会记录真实抓取产生的更新、到价与异常消息。若后续接入 Telegram Bot API，这些日志文本可以直接复用为通知内容。
+                        </p>
+                    </section>
+                </div>
+            </div>
+        </div>
+    );
+};
