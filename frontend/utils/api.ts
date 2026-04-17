@@ -21,6 +21,8 @@ const normalizeRateData = (data: any): RateData => {
     const rawRate = Number(data.rawSellingRate);
 
     return {
+        currency: data.currency,
+        currencyName: data.currencyName,
         rawSellingRate: rawRate,
         calculatedRate: Number(
             Number.isFinite(data.calculatedRate)

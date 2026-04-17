@@ -1,4 +1,4 @@
-import { RateData, AlertLog, SystemConfig } from '../types.ts';
+import { RateData, AlertLog, MonitoredCurrencyConfig } from '../types.ts';
 import { format } from 'date-fns';
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
@@ -6,28 +6,29 @@ const generateId = () => Math.random().toString(36).substring(2, 9);
 export const processRateData = (
     newRateData: RateData,
     currentState: RateData | null,
-    config: SystemConfig,
+    currencyConfig: MonitoredCurrencyConfig,
     lastAlertedRate: number | null
 ): { alerts: AlertLog[], updatedLastAlertedRate: number | null } => {
     
     const alerts: AlertLog[] = [];
     let updatedLastAlertedRate = lastAlertedRate;
-    const currency = config.currency;
+    const currency = currencyConfig.currency;
     const fetchTime = newRateData.fetchTime;
     const calculatedRate = newRateData.calculatedRate;
     const rawRate = newRateData.rawSellingRate;
     const pubTime = newRateData.pubTime;
 
     // 1. Check for Target Hit
-    if (calculatedRate <= config.targetRate) {
+    if (calculatedRate <= currencyConfig.targetRate) {
         // Only alert if we haven't alerted yet, OR if the price has dropped further since the last alert
         if (lastAlertedRate === null || calculatedRate < lastAlertedRate) {
             alerts.push({
+                currency,
                 id: generateId(),
                 type: 'target_hit',
                 timestamp: fetchTime,
                 read: false,
-                message: `[BOC ${currency}/CNY 到价提醒]\n当前汇率: ${calculatedRate.toFixed(4)}\n目标阈值: ${config.targetRate.toFixed(4)}\nSelling Rate(100 ${currency}): ${rawRate.toFixed(2)}\nPub Time: ${pubTime}`
+                message: `[BOC ${currency}/CNY 到价提醒]\n当前汇率: ${calculatedRate.toFixed(4)}\n目标阈值: ${currencyConfig.targetRate.toFixed(4)}\nSelling Rate(100 ${currency}): ${rawRate.toFixed(2)}\nPub Time: ${pubTime}`
             });
             updatedLastAlertedRate = calculatedRate;
         }
@@ -40,6 +41,7 @@ export const processRateData = (
     if (currentState) {
         if (currentState.rawSellingRate !== rawRate || currentState.pubTime !== pubTime) {
             alerts.push({
+                currency,
                 id: generateId(),
                 type: 'update',
                 timestamp: fetchTime,
@@ -50,6 +52,7 @@ export const processRateData = (
     } else {
         // Initial fetch
          alerts.push({
+            currency,
             id: generateId(),
             type: 'update',
             timestamp: fetchTime,
@@ -63,6 +66,7 @@ export const processRateData = (
 
 export const createErrorAlert = (currency: string, errorMessage: string): AlertLog => {
     return {
+        currency,
         id: generateId(),
         type: 'error',
         timestamp: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
@@ -71,8 +75,9 @@ export const createErrorAlert = (currency: string, errorMessage: string): AlertL
     };
 };
 
-export const createInfoAlert = (message: string): AlertLog => {
+export const createInfoAlert = (message: string, currency?: string): AlertLog => {
     return {
+        currency,
         id: generateId(),
         type: 'info',
         timestamp: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),

@@ -1,4 +1,6 @@
 export interface RateData {
+    currency?: string;
+    currencyName?: string;
     rawSellingRate: number; // e.g., 468.25 (per 100 units)
     calculatedRate: number; // e.g., 4.6825 (per 1 unit)
     pubTime: string;
@@ -9,6 +11,7 @@ export interface RateData {
 export type AlertType = 'update' | 'target_hit' | 'error' | 'info';
 
 export interface AlertLog {
+    currency?: string;
     id: string;
     type: AlertType;
     message: string;
@@ -16,9 +19,13 @@ export interface AlertLog {
     read: boolean;
 }
 
-export interface SystemConfig {
-    currency: string; // e.g., 'AUD', 'USD'
+export interface MonitoredCurrencyConfig {
+    currency: string;
     targetRate: number;
+}
+
+export interface SystemConfig {
+    monitoredCurrencies: MonitoredCurrencyConfig[];
     checkIntervalSeconds: number;
     isRunning: boolean;
     webhookUrl: string;
@@ -27,11 +34,11 @@ export interface SystemConfig {
 }
 
 export interface SystemState {
-    currentRate: RateData | null;
-    previousRate: RateData | null;
-    history: RateData[];
+    currentRates: Record<string, RateData | null>;
+    previousRates: Record<string, RateData | null>;
+    historyByCurrency: Record<string, RateData[]>;
     alerts: AlertLog[];
     config: SystemConfig;
-    lastError: string | null;
-    lastAlertedRate: number | null; // To prevent spamming target hits
+    lastErrors: Record<string, string | null>;
+    lastAlertedRates: Record<string, number | null>;
 }

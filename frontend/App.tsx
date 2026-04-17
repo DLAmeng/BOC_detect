@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { SystemState, SystemConfig, RateData, AlertLog } from './types.ts';
+import { SystemState, SystemConfig, RateData, AlertLog, MonitoredCurrencyConfig } from './types.ts';
+import { DEFAULT_MONITORED_CURRENCIES } from './constants/currencies.ts';
 import { fetchRealRate, sendTelegramNotifications } from './utils/api.ts';
 import { processRateData, createErrorAlert, createInfoAlert } from './utils/alertLogic.ts';
 import { DashboardCard } from './components/DashboardCard.tsx';
@@ -22,8 +23,7 @@ import {
 import { format } from 'date-fns';
 
 const INITIAL_CONFIG: SystemConfig = {
-    currency: 'AUD',
-    targetRate: 4.66,
+    monitoredCurrencies: DEFAULT_MONITORED_CURRENCIES,
     checkIntervalSeconds: 10,
     isRunning: false,
     webhookUrl: '',
@@ -33,51 +33,163 @@ const INITIAL_CONFIG: SystemConfig = {
 
 const MAX_HISTORY_POINTS = 2000;
 
+const getCurrencyCodes = (monitoredCurrencies: MonitoredCurrencyConfig[]) =>
+    monitoredCurrencies.map((item) => item.currency);
+
+const syncRateMap = (
+    source: Record<string, RateData | null>,
+    monitoredCurrencies: MonitoredCurrencyConfig[]
+) =>
+    Object.fromEntries(
+        getCurrencyCodes(monitoredCurrencies).map((currency) => [currency, source[currency] ?? null])
+    );
+
+const syncHistoryMap = (
+    source: Record<string, RateData[]>,
+    monitoredCurrencies: MonitoredCurrencyConfig[]
+) =>
+    Object.fromEntries(
+        getCurrencyCodes(monitoredCurrencies).map((currency) => [currency, source[currency] ?? []])
+    );
+
+const syncErrorMap = (
+    source: Record<string, string | null>,
+    monitoredCurrencies: MonitoredCurrencyConfig[]
+) =>
+    Object.fromEntries(
+        getCurrencyCodes(monitoredCurrencies).map((currency) => [currency, source[currency] ?? null])
+    );
+
+const syncAlertedRateMap = (
+    source: Record<string, number | null>,
+    monitoredCurrencies: MonitoredCurrencyConfig[]
+) =>
+    Object.fromEntries(
+        getCurrencyCodes(monitoredCurrencies).map((currency) => [currency, source[currency] ?? null])
+    );
+
+const joinCurrencyCodes = (monitoredCurrencies: MonitoredCurrencyConfig[]) =>
+    monitoredCurrencies.map((item) => item.currency).join(', ');
+
+const getStatusClasses = (isRunning: boolean, errorCount: number, totalCount: number) => {
+    if (!isRunning) {
+        return 'bg-gray-800 border-gray-700 text-gray-400';
+    }
+
+    if (errorCount === 0) {
+        return 'bg-green-900/20 border-green-500/30 text-green-400';
+    }
+
+    if (errorCount === totalCount) {
+        return 'bg-red-900/20 border-red-500/30 text-red-400';
+    }
+
+    return 'bg-yellow-900/20 border-yellow-500/30 text-yellow-300';
+};
+
 const App: React.FC = () => {
     const [state, setState] = useState<SystemState>({
-        currentRate: null,
-        previousRate: null,
-        history: [],
+        currentRates: syncRateMap({}, INITIAL_CONFIG.monitoredCurrencies),
+        previousRates: syncRateMap({}, INITIAL_CONFIG.monitoredCurrencies),
+        historyByCurrency: syncHistoryMap({}, INITIAL_CONFIG.monitoredCurrencies),
         alerts: [],
         config: INITIAL_CONFIG,
-        lastError: null,
-        lastAlertedRate: null
+        lastErrors: syncErrorMap({}, INITIAL_CONFIG.monitoredCurrencies),
+        lastAlertedRates: syncAlertedRateMap({}, INITIAL_CONFIG.monitoredCurrencies)
     });
 
     const [isFetching, setIsFetching] = useState(false);
     const [view, setView] = useState<'dashboard' | 'admin'>('dashboard');
     const [showLogs, setShowLogs] = useState(true);
+    const [activeChartCurrency, setActiveChartCurrency] = useState(
+        INITIAL_CONFIG.monitoredCurrencies[0]?.currency || ''
+    );
 
     const stateRef = useRef(state);
     useEffect(() => {
         stateRef.current = state;
     }, [state]);
 
+    useEffect(() => {
+        const monitoredCurrencies = state.config.monitoredCurrencies;
+        if (monitoredCurrencies.length === 0) {
+            setActiveChartCurrency('');
+            return;
+        }
+
+        if (!monitoredCurrencies.some((item) => item.currency === activeChartCurrency)) {
+            setActiveChartCurrency(monitoredCurrencies[0].currency);
+        }
+    }, [state.config.monitoredCurrencies, activeChartCurrency]);
+
     const runCheck = useCallback(async () => {
         const currentState = stateRef.current;
-        if (!currentState.config.isRunning || isFetching) {
+        const monitoredCurrencies = currentState.config.monitoredCurrencies;
+
+        if (!currentState.config.isRunning || isFetching || monitoredCurrencies.length === 0) {
             return;
         }
 
         setIsFetching(true);
+
+        const nextCurrentRates = { ...currentState.currentRates };
+        const nextPreviousRates = { ...currentState.previousRates };
+        const nextHistoryByCurrency = { ...currentState.historyByCurrency };
+        const nextLastErrors = { ...currentState.lastErrors };
+        const nextLastAlertedRates = { ...currentState.lastAlertedRates };
+        const cycleAlerts: AlertLog[] = [];
+        const notificationMessages: string[] = [];
+
         try {
-            const newRateData: RateData = await fetchRealRate(currentState.config.currency);
+            // Sequential fetching is gentler to the source site than bursting parallel requests.
+            for (const currencyConfig of monitoredCurrencies) {
+                const currency = currencyConfig.currency;
 
-            const { alerts, updatedLastAlertedRate } = processRateData(
-                newRateData,
-                currentState.currentRate,
-                currentState.config,
-                currentState.lastAlertedRate
-            );
-            const alertsToStore: AlertLog[] = [...alerts];
-            const targetHitMessages = alerts
-                .filter((alert) => alert.type === 'target_hit')
-                .map((alert) => alert.message);
+                try {
+                    const newRateData: RateData = await fetchRealRate(currency);
+                    const currentRate = currentState.currentRates[currency] ?? null;
 
-            if (targetHitMessages.length > 0) {
+                    const { alerts, updatedLastAlertedRate } = processRateData(
+                        newRateData,
+                        currentRate,
+                        currencyConfig,
+                        currentState.lastAlertedRates[currency] ?? null
+                    );
+
+                    const hasNewPoint =
+                        newRateData.rawSellingRate !== currentRate?.rawSellingRate ||
+                        newRateData.pubTime !== currentRate?.pubTime;
+
+                    nextCurrentRates[currency] = newRateData;
+                    nextPreviousRates[currency] = hasNewPoint ? currentRate : currentState.previousRates[currency] ?? null;
+                    nextHistoryByCurrency[currency] = hasNewPoint
+                        ? [...(currentState.historyByCurrency[currency] ?? []), newRateData].slice(-MAX_HISTORY_POINTS)
+                        : currentState.historyByCurrency[currency] ?? [];
+                    nextLastErrors[currency] = null;
+                    nextLastAlertedRates[currency] = updatedLastAlertedRate;
+
+                    cycleAlerts.push(...alerts);
+                    notificationMessages.push(
+                        ...alerts
+                            .filter((alert) => alert.type === 'target_hit')
+                            .map((alert) => alert.message)
+                    );
+                } catch (error: any) {
+                    const message = error?.message || '未知错误';
+                    const errorAlert = createErrorAlert(currency, message);
+                    cycleAlerts.push(errorAlert);
+                    nextLastErrors[currency] = message;
+
+                    if ((currentState.lastErrors[currency] ?? null) !== message) {
+                        notificationMessages.push(errorAlert.message);
+                    }
+                }
+            }
+
+            if (notificationMessages.length > 0) {
                 try {
                     const result = await sendTelegramNotifications({
-                        messages: targetHitMessages,
+                        messages: notificationMessages,
                         botToken: currentState.config.telegramBotToken,
                         chatId: currentState.config.telegramChatId
                     });
@@ -86,62 +198,25 @@ const App: React.FC = () => {
                         throw new Error(result.reason || '未知错误');
                     }
                 } catch (telegramError: any) {
-                    alertsToStore.unshift(
-                        createInfoAlert(
-                            `[Telegram] 到价通知发送失败：${telegramError?.message || '未知错误'}`
-                        )
+                    cycleAlerts.unshift(
+                        createInfoAlert(`[Telegram] 通知发送失败：${telegramError?.message || '未知错误'}`)
                     );
                 }
             }
 
             setState((prev) => {
-                const hasNewPoint =
-                    newRateData.rawSellingRate !== prev.currentRate?.rawSellingRate ||
-                    newRateData.pubTime !== prev.currentRate?.pubTime;
-                const updatedHistory = hasNewPoint
-                    ? [...prev.history, newRateData].slice(-MAX_HISTORY_POINTS)
-                    : prev.history;
+                const liveCurrencies = prev.config.monitoredCurrencies;
 
                 return {
                     ...prev,
-                    previousRate: hasNewPoint ? prev.currentRate : prev.previousRate,
-                    currentRate: newRateData,
-                    history: updatedHistory,
-                    alerts: [...alertsToStore, ...prev.alerts].slice(0, 100),
-                    lastAlertedRate: updatedLastAlertedRate,
-                    lastError: null
+                    currentRates: syncRateMap(nextCurrentRates, liveCurrencies),
+                    previousRates: syncRateMap(nextPreviousRates, liveCurrencies),
+                    historyByCurrency: syncHistoryMap(nextHistoryByCurrency, liveCurrencies),
+                    alerts: [...cycleAlerts, ...prev.alerts].slice(0, 150),
+                    lastErrors: syncErrorMap(nextLastErrors, liveCurrencies),
+                    lastAlertedRates: syncAlertedRateMap(nextLastAlertedRates, liveCurrencies)
                 };
             });
-        } catch (error: any) {
-            const message = error?.message || '未知错误';
-            const errorAlert = createErrorAlert(currentState.config.currency, message);
-            const alertsToStore = [errorAlert];
-
-            if (currentState.lastError !== message) {
-                try {
-                    const result = await sendTelegramNotifications({
-                        messages: [errorAlert.message],
-                        botToken: currentState.config.telegramBotToken,
-                        chatId: currentState.config.telegramChatId
-                    });
-
-                    if (!result.success && !result.skipped) {
-                        throw new Error(result.reason || '未知错误');
-                    }
-                } catch (telegramError: any) {
-                    alertsToStore.unshift(
-                        createInfoAlert(
-                            `[Telegram] 异常通知发送失败：${telegramError?.message || '未知错误'}`
-                        )
-                    );
-                }
-            }
-
-            setState((prev) => ({
-                ...prev,
-                lastError: message,
-                alerts: [...alertsToStore, ...prev.alerts].slice(0, 100)
-            }));
         } finally {
             setIsFetching(false);
         }
@@ -164,34 +239,32 @@ const App: React.FC = () => {
 
     const handleSaveConfig = (newConfig: SystemConfig) => {
         setState((prev) => {
-            const isCurrencyChanged = prev.config.currency !== newConfig.currency;
+            const previousCodes = joinCurrencyCodes(prev.config.monitoredCurrencies);
+            const nextCodes = joinCurrencyCodes(newConfig.monitoredCurrencies);
+            const didCurrencyListChange = previousCodes !== nextCodes;
 
-            const newAlerts = isCurrencyChanged
+            const alerts = didCurrencyListChange
                 ? [
                       {
                           id: Math.random().toString(36).substring(2, 9),
                           type: 'info' as const,
                           timestamp: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
                           read: false,
-                          message: `[系统提示] 已切换监控币种为 ${newConfig.currency}，当前会话数据已重置，图表会重新加载该币种历史记录。`
+                          message: `[系统提示] 已更新监控币种：${nextCodes}。新增币种将开始独立抓取，移除的币种将停止监控。`
                       },
                       ...prev.alerts
-                  ].slice(0, 100)
+                  ].slice(0, 150)
                 : prev.alerts;
 
             return {
                 ...prev,
                 config: newConfig,
-                alerts: newAlerts,
-                ...(isCurrencyChanged
-                    ? {
-                          currentRate: null,
-                          previousRate: null,
-                          history: [],
-                          lastAlertedRate: null,
-                          lastError: null
-                      }
-                    : {})
+                alerts,
+                currentRates: syncRateMap(prev.currentRates, newConfig.monitoredCurrencies),
+                previousRates: syncRateMap(prev.previousRates, newConfig.monitoredCurrencies),
+                historyByCurrency: syncHistoryMap(prev.historyByCurrency, newConfig.monitoredCurrencies),
+                lastErrors: syncErrorMap(prev.lastErrors, newConfig.monitoredCurrencies),
+                lastAlertedRates: syncAlertedRateMap(prev.lastAlertedRates, newConfig.monitoredCurrencies)
             };
         });
     };
@@ -207,6 +280,24 @@ const App: React.FC = () => {
         setState((prev) => ({ ...prev, alerts: [] }));
     };
 
+    const monitoredCurrencies = state.config.monitoredCurrencies;
+    const activeChartConfig =
+        monitoredCurrencies.find((item) => item.currency === activeChartCurrency) ?? monitoredCurrencies[0];
+    const activeErrorCount = monitoredCurrencies.filter((item) => state.lastErrors[item.currency]).length;
+    const statusClasses = getStatusClasses(
+        state.config.isRunning,
+        activeErrorCount,
+        monitoredCurrencies.length
+    );
+
+    const statusLabel = !state.config.isRunning
+        ? '已停止'
+        : activeErrorCount === 0
+          ? `监控中 (${monitoredCurrencies.length} 个币种)`
+          : activeErrorCount === monitoredCurrencies.length
+            ? `全部异常 (${activeErrorCount}/${monitoredCurrencies.length})`
+            : `部分异常 (${activeErrorCount}/${monitoredCurrencies.length})`;
+
     return (
         <div className="min-h-screen p-3 sm:p-4 md:p-8 max-w-7xl mx-auto">
             <header className="mb-6 md:mb-8">
@@ -219,35 +310,24 @@ const App: React.FC = () => {
                         <p className="text-gray-400 mt-1.5 text-xs sm:text-sm flex items-center flex-wrap gap-2">
                             自动化汇率追踪与报警系统
                             <span className="px-2 py-0.5 rounded text-[10px] sm:text-xs font-medium bg-blue-900/50 text-blue-300">
-                                真实后端
+                                同时监控 {monitoredCurrencies.length} 个币种
                             </span>
+                        </p>
+                        <p className="text-[10px] sm:text-xs text-gray-500 mt-2">
+                            当前监控列表：{joinCurrencyCodes(monitoredCurrencies)}
                         </p>
                     </div>
 
                     <div className="flex items-center gap-2 sm:gap-3 w-full md:w-auto justify-between md:justify-end">
-                        <div
-                            className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full border text-xs sm:text-sm ${
-                                state.config.isRunning
-                                    ? state.lastError
-                                        ? 'bg-red-900/20 border-red-500/30 text-red-400'
-                                        : 'bg-green-900/20 border-green-500/30 text-green-400'
-                                    : 'bg-gray-800 border-gray-700 text-gray-400'
-                            }`}
-                        >
+                        <div className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full border text-xs sm:text-sm ${statusClasses}`}>
                             {!state.config.isRunning ? (
                                 <ShieldAlert className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
-                            ) : state.lastError ? (
-                                <ServerCrash className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
-                            ) : (
+                            ) : activeErrorCount === 0 ? (
                                 <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
+                            ) : (
+                                <ServerCrash className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
                             )}
-                            <span className="font-medium truncate max-w-[120px] sm:max-w-none">
-                                {!state.config.isRunning
-                                    ? '已停止'
-                                    : state.lastError
-                                      ? '后端异常'
-                                      : `监控中 (${state.config.currency})`}
-                            </span>
+                            <span className="font-medium truncate max-w-[170px] sm:max-w-none">{statusLabel}</span>
                         </div>
                         <button
                             onClick={handleToggleRun}
@@ -311,31 +391,47 @@ const App: React.FC = () => {
 
             {view === 'dashboard' ? (
                 <div className="animate-in fade-in duration-300">
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6">
-                        <div
-                            className={`space-y-4 md:space-y-6 transition-all duration-300 ${
-                                showLogs ? 'lg:col-span-8' : 'lg:col-span-12'
-                            }`}
-                        >
-                            <DashboardCard
-                                currentRate={state.currentRate}
-                                previousRate={state.previousRate}
-                                targetRate={state.config.targetRate}
-                                currency={state.config.currency}
-                            />
-                            <RateChart
-                                history={state.history}
-                                targetRate={state.config.targetRate}
-                                currency={state.config.currency}
-                            />
+                    {monitoredCurrencies.length === 0 ? (
+                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center text-gray-400">
+                            请先在管理设置中选择至少一个要监控的币种。
                         </div>
+                    ) : (
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6">
+                            <div
+                                className={`space-y-4 md:space-y-6 transition-all duration-300 ${
+                                    showLogs ? 'lg:col-span-8' : 'lg:col-span-12'
+                                }`}
+                            >
+                                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6">
+                                    {monitoredCurrencies.map((currencyConfig) => (
+                                        <DashboardCard
+                                            key={currencyConfig.currency}
+                                            currentRate={state.currentRates[currencyConfig.currency] ?? null}
+                                            previousRate={state.previousRates[currencyConfig.currency] ?? null}
+                                            targetRate={currencyConfig.targetRate}
+                                            currency={currencyConfig.currency}
+                                            isActive={activeChartConfig?.currency === currencyConfig.currency}
+                                            onSelect={() => setActiveChartCurrency(currencyConfig.currency)}
+                                        />
+                                    ))}
+                                </div>
 
-                        {showLogs && (
-                            <div className="lg:col-span-4 space-y-4 md:space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                                <AlertLogView alerts={state.alerts} onClear={handleClearAlerts} />
+                                {activeChartConfig && (
+                                    <RateChart
+                                        history={state.historyByCurrency[activeChartConfig.currency] ?? []}
+                                        targetRate={activeChartConfig.targetRate}
+                                        currency={activeChartConfig.currency}
+                                    />
+                                )}
                             </div>
-                        )}
-                    </div>
+
+                            {showLogs && (
+                                <div className="lg:col-span-4 space-y-4 md:space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                                    <AlertLogView alerts={state.alerts} onClear={handleClearAlerts} />
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     <ArchitectureDocs />
                 </div>

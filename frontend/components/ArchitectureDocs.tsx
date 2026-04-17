@@ -23,7 +23,7 @@ export const ArchitectureDocs: React.FC = () => {
                         <p className="text-gray-500 mt-2"># 或者使用 Docker Compose</p>
                         <p className="text-green-400">docker compose up --build</p>
                     </div>
-                    <p>后端健康检查地址为 <code>/api/health</code>，历史数据接口为 <code>/api/history</code>，Telegram 通知接口为 <code>/api/notify/telegram</code>。</p>
+                    <p>后端健康检查地址为 <code>/api/health</code>，历史数据接口为 <code>/api/history</code>，Telegram 通知接口为 <code>/api/notify/telegram</code>。当前版本支持多币种同时监控，前端会在同一轮询周期内逐个抓取选中的币种。</p>
                 </div>
             </div>
 
@@ -35,7 +35,7 @@ export const ArchitectureDocs: React.FC = () => {
                             1. 数据源 (Node.js / Cheerio)
                         </h3>
                         <p className="text-sm text-gray-400 leading-relaxed">
-                            后端利用 <code>axios</code> 获取中国银行外汇牌价 HTML，并使用 <code>cheerio</code> 解析表格，提取目标币种的“现汇卖出价”和“发布时间”。抓取结果会被写入本地持久化文件，供图表跨重启加载。
+                            后端利用 <code>axios</code> 获取中国银行外汇牌价 HTML，并使用 <code>cheerio</code> 解析表格，提取目标币种的“现汇卖出价”和“发布时间”。当前前端可在一个监控周期里顺序请求多个币种，既实现多币种监控，也避免并发突发请求过猛。抓取结果会被写入本地持久化文件，供图表跨重启加载。
                         </p>
                     </section>
 
@@ -45,7 +45,7 @@ export const ArchitectureDocs: React.FC = () => {
                             2. 前端处理逻辑
                         </h3>
                         <p className="text-sm text-gray-400 leading-relaxed">
-                            前端只调用真实 API，不再生成模拟汇率。中行页面显示的是每 100 外币的价格，因此系统会将 <code>rawSellingRate</code> 除以 100，换算成更直观的 1 外币兑人民币价格，并把后端持久化历史与当前会话的新数据合并展示。
+                            前端只调用真实 API，不再生成模拟汇率。每个监控币种都有独立的目标价、历史曲线和告警状态。中行页面显示的是每 100 外币的价格，因此系统会将 <code>rawSellingRate</code> 除以 100，换算成更直观的 1 外币兑人民币价格，并把后端持久化历史与当前会话的新数据合并展示。
                         </p>
                     </section>
                 </div>
@@ -57,7 +57,7 @@ export const ArchitectureDocs: React.FC = () => {
                             3. 状态管理 (防刷屏机制)
                         </h3>
                         <p className="text-sm text-gray-400 leading-relaxed">
-                            系统会记录 <code>lastAlertedRate</code>。当价格跌破阈值时触发提醒，只有价格继续创新低，或先回升到阈值上方后再次跌破，才会发送新的到价通知。
+                            系统会按币种分别记录 <code>lastAlertedRate</code>。当某个币种跌破自身阈值时触发提醒，只有该币种价格继续创新低，或先回升到阈值上方后再次跌破，才会发送新的到价通知。
                         </p>
                     </section>
 
@@ -67,7 +67,7 @@ export const ArchitectureDocs: React.FC = () => {
                             4. 通知日志
                         </h3>
                         <p className="text-sm text-gray-400 leading-relaxed">
-                            控制台会记录真实抓取产生的更新、到价与异常消息。配置 Telegram 后，到价提醒会直接通过后端发送；异常通知则会在错误信息变化时再发送，避免连续刷屏。
+                            控制台会记录真实抓取产生的更新、到价与异常消息。配置 Telegram 后，到价提醒会直接通过后端发送；异常通知则会在错误信息变化时再发送，避免连续刷屏。日志面板会标出触发消息的币种，方便同时监控多种货币时快速定位。
                         </p>
                     </section>
                 </div>

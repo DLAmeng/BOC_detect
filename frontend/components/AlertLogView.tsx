@@ -71,9 +71,16 @@ export const AlertLogView: React.FC<Props> = ({ alerts, onClear }) => {
                             {getIcon(alert.type)}
                             <div className="flex-grow min-w-0">
                                 <div className="flex justify-between items-start mb-1">
-                                    <span className="text-[10px] md:text-xs font-medium text-gray-400 uppercase tracking-wider">
-                                        {getTypeName(alert.type)}
-                                    </span>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-[10px] md:text-xs font-medium text-gray-400 uppercase tracking-wider">
+                                            {getTypeName(alert.type)}
+                                        </span>
+                                        {alert.currency && (
+                                            <span className="text-[10px] md:text-xs font-medium text-blue-300 bg-blue-500/10 border border-blue-500/20 rounded-full px-2 py-0.5">
+                                                {alert.currency}
+                                            </span>
+                                        )}
+                                    </div>
                                     <span className="text-[10px] md:text-xs text-gray-500 font-mono whitespace-nowrap ml-2">
                                         {alert.timestamp.split(' ')[1]}
                                     </span>
