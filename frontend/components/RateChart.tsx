@@ -186,10 +186,18 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
     if (thresholds) {
         extraPoints.push(thresholds.bestZoneUpper, thresholds.goodZoneUpper);
     }
-    const avgRate = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : 1;
-    const padding = Math.max(avgRate * 0.02, 0.01);
-    const minRate = Math.min(...rates, ...extraPoints) - padding;
-    const maxRate = Math.max(...rates, ...extraPoints) + padding;
+    
+    const allValues = [...rates, ...extraPoints];
+    const dataMin = allValues.length > 0 ? Math.min(...allValues) : 0;
+    const dataMax = allValues.length > 0 ? Math.max(...allValues) : 1;
+    const diff = dataMax - dataMin;
+    
+    // Use 10% of the actual data spread as padding, ensuring small values like JPY are not squashed.
+    // If diff is 0 (one point), fallback to 0.5% of the value.
+    const padding = diff === 0 ? dataMin * 0.005 : diff * 0.1;
+    
+    const minRate = dataMin - padding;
+    const maxRate = dataMax + padding;
 
     return (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 md:p-6 h-[350px] md:h-[420px] flex flex-col">

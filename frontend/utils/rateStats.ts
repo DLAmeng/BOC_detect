@@ -3,7 +3,7 @@ import { RateData } from '../types.ts';
 const MIN_RANGE_MAP: Record<string, number> = {
     AUD: 0.04,
     USD: 0.05,
-    JPY: 0.30,
+    JPY: 0.0030,
     EUR: 0.06,
     GBP: 0.06,
     HKD: 0.01,
