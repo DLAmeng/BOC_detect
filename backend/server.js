@@ -15,9 +15,11 @@ const PORT = Number(process.env.PORT || process.env.API_BACKEND_PORT || 3001);
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 10000);
 const BOC_SOURCE_URL = process.env.BOC_SOURCE_URL || 'https://www.boc.cn/sourcedb/whpj/';
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
-const HISTORY_FILE = path.join(DATA_DIR, 'rates-history.json');
-const MAX_HISTORY_PER_CURRENCY = Number(process.env.MAX_HISTORY_PER_CURRENCY || 5000);
-const DEFAULT_HISTORY_LIMIT = Number(process.env.DEFAULT_HISTORY_LIMIT || 500);
+const LEGACY_HISTORY_FILE = path.join(DATA_DIR, 'rates-history.json');
+const MAX_HISTORY_PER_CURRENCY = Number(process.env.MAX_HISTORY_PER_CURRENCY || 100000);
+const DEFAULT_HISTORY_LIMIT = Number(process.env.DEFAULT_HISTORY_LIMIT || 2000);
+
+const currencyFilePath = (code) => path.join(DATA_DIR, `rates-${code}.ndjson`);
 const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || '').trim();
 const rawCorsOrigin = process.env.CORS_ORIGIN || '*';
@@ -51,7 +53,7 @@ const REQUEST_HEADERS = {
 
 let historyStore = null;
 let historyLoadPromise = null;
-let historyWriteQueue = Promise.resolve();
+const writeQueues = new Map();
 
 const formatDateTime = (date = new Date()) => {
   const year = date.getFullYear();
@@ -72,40 +74,87 @@ const ensureDataDirectory = async () => {
   await fs.mkdir(DATA_DIR, { recursive: true });
 };
 
-const loadHistoryStore = async () => {
-  if (historyStore) {
-    return historyStore;
+const enqueueWrite = (currencyCode, task) => {
+  const previous = writeQueues.get(currencyCode) || Promise.resolve();
+  const next = previous.then(task, task);
+  writeQueues.set(
+    currencyCode,
+    next.catch((error) => {
+      console.error(`[BOC Backend] Write task for ${currencyCode} failed:`, error);
+    })
+  );
+  return next;
+};
+
+const appendRecord = (currencyCode, record) =>
+  enqueueWrite(currencyCode, () =>
+    fs.appendFile(currencyFilePath(currencyCode), `${JSON.stringify(record)}\n`, 'utf8')
+  );
+
+const compactCurrencyFile = (currencyCode, records) =>
+  enqueueWrite(currencyCode, () => {
+    const payload = records.length ? `${records.map((r) => JSON.stringify(r)).join('\n')}\n` : '';
+    return fs.writeFile(currencyFilePath(currencyCode), payload, 'utf8');
+  });
+
+const loadCurrencyNdjson = async (currencyCode) => {
+  try {
+    const raw = await fs.readFile(currencyFilePath(currencyCode), 'utf8');
+    if (!raw.trim()) return [];
+    return raw
+      .split('\n')
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
   }
+};
+
+const migrateLegacyIfNeeded = async () => {
+  try {
+    const raw = await fs.readFile(LEGACY_HISTORY_FILE, 'utf8');
+    const legacy = raw.trim() ? JSON.parse(raw) : {};
+    for (const [currency, records] of Object.entries(legacy)) {
+      if (!Array.isArray(records) || records.length === 0) continue;
+      const trimmed = records.slice(-MAX_HISTORY_PER_CURRENCY);
+      const payload = `${trimmed.map((r) => JSON.stringify(r)).join('\n')}\n`;
+      await fs.writeFile(currencyFilePath(currency), payload, 'utf8');
+    }
+    await fs.rename(LEGACY_HISTORY_FILE, `${LEGACY_HISTORY_FILE}.bak`);
+    console.log('[BOC Backend] Migrated legacy rates-history.json to per-currency NDJSON files.');
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error('[BOC Backend] Legacy migration failed:', error);
+    }
+  }
+};
+
+const loadHistoryStore = async () => {
+  if (historyStore) return historyStore;
 
   if (!historyLoadPromise) {
     historyLoadPromise = (async () => {
       await ensureDataDirectory();
+      await migrateLegacyIfNeeded();
 
-      try {
-        const rawContent = await fs.readFile(HISTORY_FILE, 'utf8');
-        historyStore = rawContent.trim() ? JSON.parse(rawContent) : {};
-      } catch (error) {
-        if (error?.code !== 'ENOENT') {
-          throw error;
+      const store = {};
+      for (const code of Object.keys(CURRENCY_MAP)) {
+        const records = await loadCurrencyNdjson(code);
+        if (records.length > MAX_HISTORY_PER_CURRENCY) {
+          store[code] = records.slice(-MAX_HISTORY_PER_CURRENCY);
+          await compactCurrencyFile(code, store[code]);
+        } else {
+          store[code] = records;
         }
-
-        historyStore = {};
-        await fs.writeFile(HISTORY_FILE, JSON.stringify(historyStore, null, 2), 'utf8');
       }
 
+      historyStore = store;
       return historyStore;
     })();
   }
 
   return historyLoadPromise;
-};
-
-const queueHistoryWrite = async () => {
-  const store = await loadHistoryStore();
-  historyWriteQueue = historyWriteQueue.then(() =>
-    fs.writeFile(HISTORY_FILE, JSON.stringify(store, null, 2), 'utf8')
-  );
-  return historyWriteQueue;
 };
 
 const findCurrencyRow = ($, currencyName) => {
@@ -177,7 +226,7 @@ const fetchRateRecord = async (currencyCode) => {
 
 const recordRateHistory = async (rateRecord) => {
   const store = await loadHistoryStore();
-  const currentHistory = store[rateRecord.currency] || [];
+  const currentHistory = store[rateRecord.currency] || (store[rateRecord.currency] = []);
   const lastRecord = currentHistory[currentHistory.length - 1];
 
   if (
@@ -192,10 +241,11 @@ const recordRateHistory = async (rateRecord) => {
 
   if (currentHistory.length > MAX_HISTORY_PER_CURRENCY) {
     currentHistory.splice(0, currentHistory.length - MAX_HISTORY_PER_CURRENCY);
+    await compactCurrencyFile(rateRecord.currency, currentHistory);
+  } else {
+    await appendRecord(rateRecord.currency, rateRecord);
   }
 
-  store[rateRecord.currency] = currentHistory;
-  await queueHistoryWrite();
   return true;
 };
 
@@ -227,7 +277,6 @@ app.get('/api/health', async (_req, res) => {
     service: 'boc-monitor-backend',
     source: BOC_SOURCE_URL,
     dataDir: DATA_DIR,
-    historyFile: HISTORY_FILE,
     telegramConfigured: Boolean(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID),
     timestamp: formatDateTime(),
   });
@@ -349,6 +398,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`API Endpoint: http://0.0.0.0:${PORT}/api/rates`);
   console.log(`History API: http://0.0.0.0:${PORT}/api/history`);
   console.log(`Health Check: http://0.0.0.0:${PORT}/api/health`);
-  console.log(`Data File: ${HISTORY_FILE}`);
+  console.log(`Data Dir: ${DATA_DIR} (per-currency rates-{CODE}.ndjson)`);
   console.log('=================================================');
 });

@@ -9,8 +9,8 @@ services:
       BOC_SOURCE_URL: https://www.boc.cn/sourcedb/whpj/
       CORS_ORIGIN: "*"
       DATA_DIR: /app/data
-      MAX_HISTORY_PER_CURRENCY: 5000
-      DEFAULT_HISTORY_LIMIT: 500
+      MAX_HISTORY_PER_CURRENCY: 100000
+      DEFAULT_HISTORY_LIMIT: 2000
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     ports:

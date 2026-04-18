@@ -3,7 +3,7 @@ import { RateData } from '../types.ts';
 import { fetchRateHistory } from '../utils/api.ts';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 
-type TimeRange = 'session' | '10m' | '30m' | '1h' | '6h' | '24h';
+type TimeRange = 'session' | '1h' | '6h' | '24h' | '7d' | '30d';
 
 interface Props {
     history: RateData[];
@@ -11,21 +11,24 @@ interface Props {
     currency: string;
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
 const RANGE_WINDOWS: Record<Exclude<TimeRange, 'session'>, number> = {
-    '10m': 10 * 60 * 1000,
-    '30m': 30 * 60 * 1000,
-    '1h': 60 * 60 * 1000,
-    '6h': 6 * 60 * 60 * 1000,
-    '24h': 24 * 60 * 60 * 1000,
+    '1h': HOUR_MS,
+    '6h': 6 * HOUR_MS,
+    '24h': 24 * HOUR_MS,
+    '7d': 7 * DAY_MS,
+    '30d': 30 * DAY_MS,
 };
 
 const RANGES: { value: TimeRange; label: string }[] = [
     { value: 'session', label: '当前会话' },
-    { value: '10m', label: '10 分钟' },
-    { value: '30m', label: '30 分钟' },
     { value: '1h', label: '1 小时' },
     { value: '6h', label: '6 小时' },
     { value: '24h', label: '24 小时' },
+    { value: '7d', label: '7 天' },
+    { value: '30d', label: '30 天' },
 ];
 
 export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) => {
@@ -120,8 +123,9 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
         );
     }
 
+    const useDayLabel = timeRange === '7d' || timeRange === '30d';
     const chartData = displayData.map((item) => ({
-        time: item.fetchTime.split(' ')[1],
+        time: useDayLabel ? item.fetchTime.split(' ')[0].slice(5) : item.fetchTime.split(' ')[1],
         fullTime: item.fetchTime,
         rate: item.calculatedRate
     }));

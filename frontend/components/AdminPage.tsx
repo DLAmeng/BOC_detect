@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { SystemConfig } from '../types.ts';
 import { AVAILABLE_CURRENCIES, buildCurrencyConfig } from '../constants/currencies.ts';
-import { Save, CheckSquare, Square, Server, Bell, Target, Database } from 'lucide-react';
+import { fetchRateHistory, sendTelegramNotifications } from '../utils/api.ts';
+import { suggestTargetRate } from '../utils/rateStats.ts';
+import { Save, CheckSquare, Square, Server, Bell, Target, Database, Lightbulb, Send } from 'lucide-react';
 
 interface Props {
     config: SystemConfig;
@@ -20,12 +22,43 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
     const [isDirty, setIsDirty] = useState(false);
     const [saveMessage, setSaveMessage] = useState('');
     const [validationMessage, setValidationMessage] = useState('');
+    const [suggestedRates, setSuggestedRates] = useState<Record<string, number | null>>({});
+    const [loadingSuggestions, setLoadingSuggestions] = useState<Record<string, boolean>>({});
+    const [testSending, setTestSending] = useState(false);
+    const [testResult, setTestResult] = useState<{ type: 'success' | 'warn' | 'error'; text: string } | null>(null);
 
     useEffect(() => {
         setLocalConfig(config);
         setIsDirty(false);
         setValidationMessage('');
     }, [config]);
+
+    const refreshSuggestion = async (currency: string, silent = false) => {
+        if (!silent) setLoadingSuggestions((prev) => ({ ...prev, [currency]: true }));
+        try {
+            const history = await fetchRateHistory(currency, 2000);
+            setSuggestedRates((prev) => ({ ...prev, [currency]: suggestTargetRate(history) }));
+        } catch {
+            setSuggestedRates((prev) => ({ ...prev, [currency]: null }));
+        } finally {
+            if (!silent) setLoadingSuggestions((prev) => ({ ...prev, [currency]: false }));
+        }
+    };
+
+    useEffect(() => {
+        localConfig.monitoredCurrencies.forEach((c) => {
+            if (suggestedRates[c.currency] === undefined) {
+                refreshSuggestion(c.currency);
+            }
+        });
+    }, [localConfig.monitoredCurrencies]);
+
+    useEffect(() => {
+        const id = window.setInterval(() => {
+            localConfig.monitoredCurrencies.forEach((c) => refreshSuggestion(c.currency, true));
+        }, 5 * 60 * 1000);
+        return () => window.clearInterval(id);
+    }, [localConfig.monitoredCurrencies]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const { name, value, type } = e.target;
@@ -54,6 +87,12 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
             };
         });
 
+        setSuggestedRates((prev) => {
+            const next = { ...prev };
+            delete next[currencyCode];
+            return next;
+        });
+
         setIsDirty(true);
         setSaveMessage('');
         setValidationMessage('');
@@ -70,6 +109,29 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
         setIsDirty(true);
         setSaveMessage('');
         setValidationMessage('');
+    };
+
+    const handleTestTelegram = async () => {
+        setTestSending(true);
+        setTestResult(null);
+        try {
+            const result = await sendTelegramNotifications({
+                messages: ['[BOC 测试] Telegram 连接正常 ✓'],
+                botToken: localConfig.telegramBotToken,
+                chatId: localConfig.telegramChatId
+            });
+            if (result.skipped) {
+                setTestResult({ type: 'warn', text: '未配置 Token 或 Chat ID，无法发送。' });
+            } else if (result.success) {
+                setTestResult({ type: 'success', text: '测试消息已发送，请查看 Telegram。' });
+            } else {
+                setTestResult({ type: 'error', text: result.reason || '发送失败' });
+            }
+        } catch (error: any) {
+            setTestResult({ type: 'error', text: error?.message || '发送失败' });
+        } finally {
+            setTestSending(false);
+        }
     };
 
     const handleSave = () => {
@@ -182,6 +244,25 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                                             />
                                         </div>
                                         <p className="text-[10px] md:text-xs text-gray-500 mt-2">当 {currencyConfig.currency} 的真实汇率 ≤ 此值时触发提醒。</p>
+                                        {loadingSuggestions[currencyConfig.currency] && (
+                                            <p className="text-[10px] md:text-xs text-gray-600 mt-1.5">正在计算建议目标价…</p>
+                                        )}
+                                        {!loadingSuggestions[currencyConfig.currency] && suggestedRates[currencyConfig.currency] != null && (
+                                            <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                                <Lightbulb className="w-3 h-3 text-yellow-400 flex-shrink-0" />
+                                                <span className="text-[10px] md:text-xs text-yellow-300">
+                                                    近 14 天 20% 低位：¥{suggestedRates[currencyConfig.currency]!.toFixed(4)}
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleTargetRateChange(currencyConfig.currency, suggestedRates[currencyConfig.currency]!)}
+                                                    className="text-[10px] md:text-xs px-2 py-0.5 rounded bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 border border-yellow-500/20 transition-colors"
+                                                >
+                                                    应用
+                                                </button>
+                                                <span className="text-[10px] text-gray-600">每 5 分钟自动更新</span>
+                                            </div>
+                                        )}
                                     </div>
                                 ))}
                             </div>
@@ -234,6 +315,35 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                         />
                         <p className="text-[10px] md:text-xs text-gray-500 mt-1.5 md:mt-2">多个币种在同一轮触发时会分别发送对应消息；异常通知仍会去重。</p>
                     </div>
+                </div>
+
+                <div className="mt-4 md:mt-5 flex flex-col sm:flex-row sm:items-center gap-3">
+                    <button
+                        type="button"
+                        onClick={handleTestTelegram}
+                        disabled={testSending}
+                        className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition-colors border ${
+                            testSending
+                                ? 'bg-gray-800 text-gray-500 border-gray-800 cursor-not-allowed'
+                                : 'bg-purple-500/10 text-purple-300 border-purple-500/30 hover:bg-purple-500/20'
+                        }`}
+                    >
+                        <Send className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                        {testSending ? '发送中…' : '发送测试消息'}
+                    </button>
+                    {testResult && (
+                        <span
+                            className={`text-xs md:text-sm font-medium ${
+                                testResult.type === 'success'
+                                    ? 'text-green-400'
+                                    : testResult.type === 'warn'
+                                      ? 'text-yellow-300'
+                                      : 'text-red-400'
+                            }`}
+                        >
+                            {testResult.text}
+                        </span>
+                    )}
                 </div>
             </div>
 
