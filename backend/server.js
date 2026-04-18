@@ -92,13 +92,26 @@ const loadMonitorConfig = async () => {
     if (!Array.isArray(config.monitoredCurrencies)) {
       config.monitoredCurrencies = DEFAULT_MONITOR_CONFIG.monitoredCurrencies;
     }
+
+    // Fallback to environment variables if not set in config file
+    if (!config.telegramBotToken && TELEGRAM_BOT_TOKEN) {
+      config.telegramBotToken = TELEGRAM_BOT_TOKEN;
+    }
+    if (!config.telegramChatId && TELEGRAM_CHAT_ID) {
+      config.telegramChatId = TELEGRAM_CHAT_ID;
+    }
     
     return config;
   } catch (error) {
     if (error?.code !== 'ENOENT') {
       console.error('[BOC Backend] Error reading monitor-config.json, using defaults:', error.message);
     }
-    return { ...DEFAULT_MONITOR_CONFIG };
+    
+    const config = { ...DEFAULT_MONITOR_CONFIG };
+    if (!config.telegramBotToken && TELEGRAM_BOT_TOKEN) config.telegramBotToken = TELEGRAM_BOT_TOKEN;
+    if (!config.telegramChatId && TELEGRAM_CHAT_ID) config.telegramChatId = TELEGRAM_CHAT_ID;
+    
+    return config;
   }
 };
 
