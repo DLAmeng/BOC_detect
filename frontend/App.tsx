@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SystemState, SystemConfig, RateData, AlertLog, MonitoredCurrencyConfig } from './types.ts';
 import { DEFAULT_MONITORED_CURRENCIES } from './constants/currencies.ts';
-import { fetchRealRate, fetchRateHistory, sendTelegramNotifications } from './utils/api.ts';
+import { fetchRealRate, fetchRateHistory, sendTelegramNotifications, fetchMonitorConfig, saveMonitorConfig } from './utils/api.ts';
 import { processRateData, createErrorAlert, createInfoAlert } from './utils/alertLogic.ts';
 import { DashboardCard } from './components/DashboardCard.tsx';
 import { RateChart } from './components/RateChart.tsx';
@@ -105,6 +105,37 @@ const App: React.FC = () => {
         lastAlertedRates: syncAlertedRateMap({}, initialConfig.monitoredCurrencies)
     });
 
+    const [isConfigLoaded, setIsConfigLoaded] = useState(false);
+
+    useEffect(() => {
+        const loadBackendConfig = async () => {
+            try {
+                const backendConfig = await fetchMonitorConfig();
+                
+                setState((prev: SystemState) => ({
+                    ...prev,
+                    config: backendConfig,
+                    currentRates: syncRateMap(prev.currentRates, backendConfig.monitoredCurrencies),
+                    previousRates: syncRateMap(prev.previousRates, backendConfig.monitoredCurrencies),
+                    historyByCurrency: syncHistoryMap(prev.historyByCurrency, backendConfig.monitoredCurrencies),
+                    lastErrors: syncErrorMap(prev.lastErrors, backendConfig.monitoredCurrencies),
+                    lastAlertedRates: syncAlertedRateMap(prev.lastAlertedRates, backendConfig.monitoredCurrencies)
+                }));
+                
+                try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(backendConfig));
+                } catch { /* ignore */ }
+            } catch (error) {
+                console.error('Failed to load config from backend, using localStorage fallback', error);
+                // initialConfig is already in state, so we don't need to do anything else here
+            } finally {
+                setIsConfigLoaded(true);
+            }
+        };
+        
+        loadBackendConfig();
+    }, []);
+
     const [isFetching, setIsFetching] = useState(false);
     const [view, setView] = useState<'dashboard' | 'admin'>('dashboard');
     const [showLogs, setShowLogs] = useState(true);
@@ -130,22 +161,22 @@ const App: React.FC = () => {
             return;
         }
 
-        if (!monitoredCurrencies.some((item) => item.currency === activeChartCurrency)) {
+        if (!monitoredCurrencies.some((item: MonitoredCurrencyConfig) => item.currency === activeChartCurrency)) {
             setActiveChartCurrency(monitoredCurrencies[0].currency);
         }
     }, [state.config.monitoredCurrencies, activeChartCurrency]);
 
     const initialLoadedRef = useRef<Set<string>>(new Set());
     useEffect(() => {
-        state.config.monitoredCurrencies.forEach(async (cfg) => {
+        state.config.monitoredCurrencies.forEach(async (cfg: MonitoredCurrencyConfig) => {
             if (initialLoadedRef.current.has(cfg.currency)) return;
             initialLoadedRef.current.add(cfg.currency);
             try {
                 const history = await fetchRateHistory(cfg.currency, 2000);
                 if (history.length === 0) return;
                 const latest = history[history.length - 1];
-                setState((prev) => {
-                    if (!prev.config.monitoredCurrencies.some((item) => item.currency === cfg.currency)) {
+                setState((prev: SystemState) => {
+                    if (!prev.config.monitoredCurrencies.some((item: MonitoredCurrencyConfig) => item.currency === cfg.currency)) {
                         return prev;
                     }
                     const existingHistory = prev.historyByCurrency[cfg.currency] ?? [];
@@ -247,7 +278,7 @@ const App: React.FC = () => {
                 }
             }
 
-            setState((prev) => {
+            setState((prev: SystemState) => {
                 const liveCurrencies = prev.config.monitoredCurrencies;
 
                 return {
@@ -280,46 +311,57 @@ const App: React.FC = () => {
         };
     }, [state.config.isRunning, state.config.checkIntervalSeconds, runCheck]);
 
-    const handleSaveConfig = (newConfig: SystemConfig) => {
-        setState((prev) => {
-            const previousCodes = joinCurrencyCodes(prev.config.monitoredCurrencies);
-            const nextCodes = joinCurrencyCodes(newConfig.monitoredCurrencies);
-            const didCurrencyListChange = previousCodes !== nextCodes;
+    const handleSaveConfig = async (newConfig: SystemConfig) => {
+        try {
+            const savedConfig = await saveMonitorConfig(newConfig);
+            
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(savedConfig));
+            } catch { /* ignore */ }
 
-            const alerts = didCurrencyListChange
-                ? [
-                      {
-                          id: Math.random().toString(36).substring(2, 9),
-                          type: 'info' as const,
-                          timestamp: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
-                          read: false,
-                          message: `[系统提示] 已更新监控币种：${nextCodes}。新增币种将开始独立抓取，移除的币种将停止监控。`
-                      },
-                      ...prev.alerts
-                  ].slice(0, 150)
-                : prev.alerts;
+            setState((prev: SystemState) => {
+                const previousCodes = joinCurrencyCodes(prev.config.monitoredCurrencies);
+                const nextCodes = joinCurrencyCodes(savedConfig.monitoredCurrencies);
+                const didCurrencyListChange = previousCodes !== nextCodes;
 
-            return {
-                ...prev,
-                config: newConfig,
-                alerts,
-                currentRates: syncRateMap(prev.currentRates, newConfig.monitoredCurrencies),
-                previousRates: syncRateMap(prev.previousRates, newConfig.monitoredCurrencies),
-                historyByCurrency: syncHistoryMap(prev.historyByCurrency, newConfig.monitoredCurrencies),
-                lastErrors: syncErrorMap(prev.lastErrors, newConfig.monitoredCurrencies),
-                lastAlertedRates: syncAlertedRateMap(prev.lastAlertedRates, newConfig.monitoredCurrencies)
-            };
-        });
+                const alerts = didCurrencyListChange
+                    ? [
+                          {
+                              id: Math.random().toString(36).substring(2, 9),
+                              type: 'info' as const,
+                              timestamp: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+                              read: false,
+                              message: `[系统提示] 已更新监控币种：${nextCodes}。新增币种将开始独立抓取，移除的币种将停止监控。`
+                          },
+                          ...prev.alerts
+                      ].slice(0, 150)
+                    : prev.alerts;
+
+                return {
+                    ...prev,
+                    config: savedConfig,
+                    alerts,
+                    currentRates: syncRateMap(prev.currentRates, savedConfig.monitoredCurrencies),
+                    previousRates: syncRateMap(prev.previousRates, savedConfig.monitoredCurrencies),
+                    historyByCurrency: syncHistoryMap(prev.historyByCurrency, savedConfig.monitoredCurrencies),
+                    lastErrors: syncErrorMap(prev.lastErrors, savedConfig.monitoredCurrencies),
+                    lastAlertedRates: syncAlertedRateMap(prev.lastAlertedRates, savedConfig.monitoredCurrencies)
+                };
+            });
+        } catch (error: any) {
+            alert(`保存配置失败: ${error?.message || '未知错误'}`);
+            throw error; // Re-throw so the AdminPage component knows it failed
+        }
     };
 
     const handleClearAlerts = () => {
-        setState((prev) => ({ ...prev, alerts: [] }));
+        setState((prev: SystemState) => ({ ...prev, alerts: [] }));
     };
 
     const monitoredCurrencies = state.config.monitoredCurrencies;
     const activeChartConfig =
-        monitoredCurrencies.find((item) => item.currency === activeChartCurrency) ?? monitoredCurrencies[0];
-    const activeErrorCount = monitoredCurrencies.filter((item) => state.lastErrors[item.currency]).length;
+        monitoredCurrencies.find((item: MonitoredCurrencyConfig) => item.currency === activeChartCurrency) ?? monitoredCurrencies[0];
+    const activeErrorCount = monitoredCurrencies.filter((item: MonitoredCurrencyConfig) => state.lastErrors[item.currency]).length;
     const statusClasses = getStatusClasses(activeErrorCount, monitoredCurrencies.length);
 
     const statusLabel =
@@ -414,7 +456,7 @@ const App: React.FC = () => {
                                 }`}
                             >
                                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6">
-                                    {monitoredCurrencies.map((currencyConfig) => (
+                                    {monitoredCurrencies.map((currencyConfig: MonitoredCurrencyConfig) => (
                                         <DashboardCard
                                             key={currencyConfig.currency}
                                             currentRate={state.currentRates[currencyConfig.currency] ?? null}

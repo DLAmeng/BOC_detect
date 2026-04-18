@@ -7,7 +7,7 @@ import { Save, CheckSquare, Square, Server, Bell, Target, Database, Lightbulb, S
 
 interface Props {
     config: SystemConfig;
-    onSave: (newConfig: SystemConfig) => void;
+    onSave: (newConfig: SystemConfig) => Promise<void> | void;
 }
 
 const sortCurrencyConfigs = (currencies: SystemConfig['monitoredCurrencies']) =>
@@ -134,20 +134,26 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
         }
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (localConfig.monitoredCurrencies.length === 0) {
             setValidationMessage('请至少选择一个要监控的币种。');
             return;
         }
 
-        onSave({
-            ...localConfig,
-            monitoredCurrencies: sortCurrencyConfigs(localConfig.monitoredCurrencies)
-        });
-        setIsDirty(false);
-        setSaveMessage('配置已成功保存。');
-        setValidationMessage('');
-        window.setTimeout(() => setSaveMessage(''), 3000);
+        try {
+            await onSave({
+                ...localConfig,
+                monitoredCurrencies: sortCurrencyConfigs(localConfig.monitoredCurrencies)
+            });
+            setIsDirty(false);
+            setSaveMessage('配置已成功保存。');
+            setValidationMessage('');
+            window.setTimeout(() => setSaveMessage(''), 3000);
+        } catch (error) {
+            // App.tsx has handled the alert, so we don't need to do anything here except console log
+            console.error('Save failed', error);
+            setValidationMessage('保存配置到服务器失败，请重试');
+        }
     };
 
     return (

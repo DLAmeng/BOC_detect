@@ -67,6 +67,36 @@ export const fetchRateHistory = async (currency: string, limit = 1000): Promise<
     return items.map(normalizeRateData);
 };
 
+export const fetchMonitorConfig = async (): Promise<any> => {
+    const response = await fetch(`${getApiBaseUrl()}/config`);
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.config;
+};
+
+export const saveMonitorConfig = async (config: any): Promise<any> => {
+    const response = await fetch(`${getApiBaseUrl()}/config`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(config)
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        throw new Error(data.error || `HTTP error! status: ${response.status}`);
+    }
+
+    return data.config;
+};
+
 export const sendTelegramNotifications = async ({
     messages,
     botToken,

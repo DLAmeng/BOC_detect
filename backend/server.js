@@ -11,6 +11,18 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+const DEFAULT_MONITOR_CONFIG = {
+  monitoredCurrencies: [
+    { currency: 'AUD', targetRate: 4.66 },
+    { currency: 'USD', targetRate: 7.15 }
+  ],
+  checkIntervalSeconds: 10,
+  isRunning: true,
+  webhookUrl: '',
+  telegramBotToken: '',
+  telegramChatId: ''
+};
+
 const PORT = Number(process.env.PORT || process.env.API_BACKEND_PORT || 3001);
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 10000);
 const BOC_SOURCE_URL = process.env.BOC_SOURCE_URL || 'https://www.boc.cn/sourcedb/whpj/';
@@ -20,6 +32,7 @@ const MAX_HISTORY_PER_CURRENCY = Number(process.env.MAX_HISTORY_PER_CURRENCY || 
 const DEFAULT_HISTORY_LIMIT = Number(process.env.DEFAULT_HISTORY_LIMIT || 2000);
 
 const currencyFilePath = (code) => path.join(DATA_DIR, `rates-${code}.ndjson`);
+const MONITOR_CONFIG_FILE = path.join(DATA_DIR, 'monitor-config.json');
 const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || '').trim();
 const rawCorsOrigin = process.env.CORS_ORIGIN || '*';
@@ -54,6 +67,86 @@ const REQUEST_HEADERS = {
 let historyStore = null;
 let historyLoadPromise = null;
 const writeQueues = new Map();
+
+const loadMonitorConfig = async () => {
+  await ensureDataDirectory();
+  try {
+    const raw = await fs.readFile(MONITOR_CONFIG_FILE, 'utf8');
+    const saved = JSON.parse(raw);
+    
+    // Merge saved config with defaults
+    const config = { ...DEFAULT_MONITOR_CONFIG, ...saved };
+    
+    // Basic validation
+    if (typeof config.checkIntervalSeconds !== 'number') {
+      config.checkIntervalSeconds = DEFAULT_MONITOR_CONFIG.checkIntervalSeconds;
+    }
+    if (!Array.isArray(config.monitoredCurrencies)) {
+      config.monitoredCurrencies = DEFAULT_MONITOR_CONFIG.monitoredCurrencies;
+    }
+    
+    return config;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error('[BOC Backend] Error reading monitor-config.json, using defaults:', error.message);
+    }
+    return { ...DEFAULT_MONITOR_CONFIG };
+  }
+};
+
+const saveMonitorConfig = async (newConfig) => {
+  await ensureDataDirectory();
+  
+  // Standardize and validate
+  let configToSave = { ...DEFAULT_MONITOR_CONFIG };
+  
+  if (newConfig && typeof newConfig === 'object') {
+    // 1. checkIntervalSeconds
+    const parsedInterval = Number.parseInt(newConfig.checkIntervalSeconds, 10);
+    configToSave.checkIntervalSeconds = Number.isFinite(parsedInterval) 
+      ? Math.max(10, parsedInterval) // 最小值强制为 10 秒
+      : DEFAULT_MONITOR_CONFIG.checkIntervalSeconds;
+      
+    // 2. isRunning
+    configToSave.isRunning = newConfig.isRunning !== undefined 
+      ? Boolean(newConfig.isRunning) 
+      : DEFAULT_MONITOR_CONFIG.isRunning;
+      
+    // 3. strings
+    configToSave.webhookUrl = newConfig.webhookUrl != null ? String(newConfig.webhookUrl) : DEFAULT_MONITOR_CONFIG.webhookUrl;
+    configToSave.telegramBotToken = newConfig.telegramBotToken != null ? String(newConfig.telegramBotToken) : DEFAULT_MONITOR_CONFIG.telegramBotToken;
+    configToSave.telegramChatId = newConfig.telegramChatId != null ? String(newConfig.telegramChatId) : DEFAULT_MONITOR_CONFIG.telegramChatId;
+    
+    // 4. monitoredCurrencies
+    if (Array.isArray(newConfig.monitoredCurrencies)) {
+      const validCurrencies = [];
+      const seen = new Set();
+      
+      for (const item of newConfig.monitoredCurrencies) {
+        if (item && typeof item === 'object' && typeof item.currency === 'string') {
+          const code = item.currency.toUpperCase();
+          if (CURRENCY_MAP[code] && !seen.has(code)) {
+            seen.add(code);
+            validCurrencies.push({
+              currency: code,
+              targetRate: typeof item.targetRate === 'number' && Number.isFinite(item.targetRate) 
+                ? item.targetRate 
+                : 0
+            });
+          }
+        }
+      }
+      
+      if (validCurrencies.length > 0) {
+        configToSave.monitoredCurrencies = validCurrencies;
+      }
+    }
+  }
+  
+  // Write to file
+  await fs.writeFile(MONITOR_CONFIG_FILE, JSON.stringify(configToSave, null, 2), 'utf8');
+  return configToSave;
+};
 
 const formatDateTime = (date = new Date()) => {
   const year = date.getFullYear();
@@ -269,6 +362,26 @@ const sendTelegramMessages = async ({ botToken, chatId, messages }) => {
 
   return sentCount;
 };
+
+app.get('/api/config', async (req, res) => {
+  try {
+    const config = await loadMonitorConfig();
+    return res.json({ success: true, config });
+  } catch (error) {
+    console.error('[BOC Backend] Failed to get config:', error);
+    return res.status(500).json({ success: false, error: '获取配置失败' });
+  }
+});
+
+app.put('/api/config', async (req, res) => {
+  try {
+    const config = await saveMonitorConfig(req.body);
+    return res.json({ success: true, config });
+  } catch (error) {
+    console.error('[BOC Backend] Failed to save config:', error);
+    return res.status(500).json({ success: false, error: '保存配置失败' });
+  }
+});
 
 app.get('/api/health', async (_req, res) => {
   await loadHistoryStore();
