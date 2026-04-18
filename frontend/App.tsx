@@ -24,7 +24,8 @@ const INITIAL_CONFIG: SystemConfig = {
     isRunning: true,
     webhookUrl: '',
     telegramBotToken: '',
-    telegramChatId: ''
+    telegramChatId: '',
+    rateSource: 'boc'
 };
 
 const STORAGE_KEY = 'boc_monitor_config';

@@ -20,7 +20,8 @@ const DEFAULT_MONITOR_CONFIG = {
   isRunning: true,
   webhookUrl: '',
   telegramBotToken: '',
-  telegramChatId: ''
+  telegramChatId: '',
+  rateSource: 'boc' // 'boc' or 'yahoo'
 };
 
 const PORT = Number(process.env.PORT || process.env.API_BACKEND_PORT || 3001);
@@ -123,6 +124,11 @@ const saveMonitorConfig = async (newConfig) => {
     configToSave.webhookUrl = newConfig.webhookUrl != null ? String(newConfig.webhookUrl) : DEFAULT_MONITOR_CONFIG.webhookUrl;
     configToSave.telegramBotToken = newConfig.telegramBotToken != null ? String(newConfig.telegramBotToken) : DEFAULT_MONITOR_CONFIG.telegramBotToken;
     configToSave.telegramChatId = newConfig.telegramChatId != null ? String(newConfig.telegramChatId) : DEFAULT_MONITOR_CONFIG.telegramChatId;
+    
+    // 4. rateSource
+    configToSave.rateSource = ['boc', 'yahoo'].includes(newConfig.rateSource) 
+      ? newConfig.rateSource 
+      : DEFAULT_MONITOR_CONFIG.rateSource;
     
     // 4. monitoredCurrencies
     if (Array.isArray(newConfig.monitoredCurrencies)) {
@@ -281,7 +287,7 @@ const httpsAgent = new https.Agent({
   keepAlive: true
 });
 
-const fetchRateRecord = async (currencyCode) => {
+const fetchRateRecord = async (currencyCode, rateSource) => {
   const currencyName = CURRENCY_MAP[currencyCode];
 
   if (!currencyName) {
@@ -289,58 +295,96 @@ const fetchRateRecord = async (currencyCode) => {
     error.statusCode = 400;
     throw error;
   }
-  
-  // Use a custom interceptor or logic for retry if needed, but adding a random query string helps bypass cache on server
-  const urlWithCacheBuster = BOC_SOURCE_URL + (BOC_SOURCE_URL.includes('?') ? '&' : '?') + `_t=${Date.now()}`;
 
-  console.log(`[BOC Backend - Fetcher] Executing GET request to ${urlWithCacheBuster}`);
-  
-  let response;
-  try {
-    response = await axios.get(urlWithCacheBuster, {
-      headers: REQUEST_HEADERS,
-      responseType: 'text',
-      timeout: REQUEST_TIMEOUT_MS,
-      httpsAgent,
-    });
-    console.log(`[BOC Backend - Fetcher] Response received. Status: ${response.status}, Data Length: ${response.data?.length || 0}`);
-  } catch (err) {
-    console.error(`[BOC Backend - Fetcher] Axios GET failed. Is Axios Error? ${axios.isAxiosError(err)}`);
-    throw err;
+  if (rateSource === 'yahoo') {
+    // Yahoo Finance fetcher logic
+    const fetchTimestampMs = Date.now();
+    const fetchTime = formatDateTime();
+    const symbol = `${currencyCode}CNY=X`;
+    const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?region=US&lang=en-US&includePrePost=false&interval=2m&useYfid=true&range=1d&corsDomain=finance.yahoo.com&.tsrc=finance`;
+    
+    try {
+      const response = await axios.get(yahooUrl, {
+        timeout: REQUEST_TIMEOUT_MS,
+        httpsAgent,
+      });
+      
+      const result = response.data?.chart?.result?.[0];
+      if (!result || !result.meta || !result.meta.regularMarketPrice) {
+        throw new Error('Yahoo Finance 数据结构异常');
+      }
+
+      const calculatedRate = result.meta.regularMarketPrice; // Yahoo gives 1 foreign = X CNY
+      const rawSellingRate = calculatedRate * 100; // Mock BOC format per 100
+      
+      // Use standard format for pubTime
+      const pubDateObj = new Date(result.meta.regularMarketTime * 1000 || fetchTimestampMs);
+      const pubTime = formatDateTime(pubDateObj);
+
+      return {
+        currency: currencyCode,
+        currencyName,
+        rawSellingRate: Number(rawSellingRate.toFixed(2)),
+        calculatedRate: Number(calculatedRate.toFixed(4)),
+        pubTime,
+        fetchTime,
+        fetchTimestampMs,
+        source: 'Yahoo Finance',
+      };
+    } catch (error) {
+      const e = new Error(`从 Yahoo Finance 获取 ${currencyName} 失败`);
+      e.statusCode = 502;
+      throw e;
+    }
+  } else {
+    // Default BOC fetcher logic
+    const urlWithCacheBuster = BOC_SOURCE_URL + (BOC_SOURCE_URL.includes('?') ? '&' : '?') + `_t=${Date.now()}`;
+    let response;
+    
+    try {
+      response = await axios.get(urlWithCacheBuster, {
+        headers: REQUEST_HEADERS,
+        responseType: 'text',
+        timeout: REQUEST_TIMEOUT_MS,
+        httpsAgent,
+      });
+    } catch (err) {
+      throw err;
+    }
+
+    const $ = cheerio.load(response.data);
+    const row = findCurrencyRow($, currencyName);
+
+    if (!row) {
+      const error = new Error(`未在中国银行页面上找到 ${currencyName} 的数据`);
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const rawSellingRate = Number.parseFloat($(row[3]).text().trim());
+    const pubDate = $(row[6]).text().trim();
+    const pubTime = $(row[7]).text().trim();
+    const publicationTime = pubDate.includes(':') ? pubDate : `${pubDate} ${pubTime}`.trim();
+    const fetchTime = formatDateTime();
+    const fetchTimestampMs = Date.now();
+
+    if (!Number.isFinite(rawSellingRate) || !publicationTime) {
+      const error = new Error(`已找到 ${currencyName}，但页面结构异常，无法解析汇率`);
+      error.statusCode = 502;
+      throw error;
+    }
+
+    return {
+      currency: currencyCode,
+      currencyName,
+      rawSellingRate,
+      calculatedRate: Number((rawSellingRate / 100).toFixed(4)),
+      pubTime: publicationTime,
+      fetchTime,
+      fetchTimestampMs,
+      source: BOC_SOURCE_URL,
+    };
   }
-
-  const $ = cheerio.load(response.data);
-  const row = findCurrencyRow($, currencyName);
-
-  if (!row) {
-    const error = new Error(`未在中国银行页面上找到 ${currencyName} 的数据`);
-    error.statusCode = 404;
-    throw error;
-  }
-
-  const rawSellingRate = Number.parseFloat($(row[3]).text().trim());
-  const pubDate = $(row[6]).text().trim();
-  const pubTime = $(row[7]).text().trim();
-  const publicationTime = pubDate.includes(':') ? pubDate : `${pubDate} ${pubTime}`.trim();
-  const fetchTime = formatDateTime();
-  const fetchTimestampMs = Date.now();
-
-  if (!Number.isFinite(rawSellingRate) || !publicationTime) {
-    const error = new Error(`已找到 ${currencyName}，但页面结构异常，无法解析汇率`);
-    error.statusCode = 502;
-    throw error;
-  }
-
-  return {
-    currency: currencyCode,
-    currencyName,
-    rawSellingRate,
-    calculatedRate: Number((rawSellingRate / 100).toFixed(4)),
-    pubTime: publicationTime,
-    fetchTime,
-    fetchTimestampMs,
-    source: BOC_SOURCE_URL,
-  };
 };
 
 const recordRateHistory = async (rateRecord) => {
@@ -459,36 +503,26 @@ app.get('/api/rates', async (req, res) => {
   }
 
   try {
-    console.log(`[BOC Backend] Attempting to fetch real-time data for: ${currencyCode}`);
-    const rateRecord = await fetchRateRecord(currencyCode);
-    console.log(`[BOC Backend] Successfully fetched data for ${currencyCode}. PubTime: ${rateRecord.pubTime}, Rate: ${rateRecord.calculatedRate}`);
+    const config = await loadMonitorConfig();
+    const rateSource = config.rateSource || 'boc';
+    
+    const rateRecord = await fetchRateRecord(currencyCode, rateSource);
 
     try {
       await recordRateHistory(rateRecord);
     } catch (historyError) {
-      console.error(`[BOC Backend] Failed to persist history for ${currencyCode}:`, historyError);
+      console.error(`[BOC Backend] Failed to persist history for ${currencyCode}:`, historyError.message);
     }
 
     return res.json(rateRecord);
   } catch (error) {
     const statusCode = error?.statusCode || 500;
     const details = error instanceof Error ? error.message : '未知错误';
-    const trace = error?.stack || 'No stack trace';
     
-    console.error(`[BOC Backend] Failed to fetch ${currencyCode}. StatusCode: ${statusCode}. Details:`, details);
-    console.error(`[BOC Backend] Error Trace for ${currencyCode}:`, trace);
-    
-    if (axios.isAxiosError(error)) {
-        console.error(`[BOC Backend] Axios Error specifics for ${currencyCode}:`, {
-            code: error.code,
-            responseStatus: error.response?.status,
-            responseData: error.response?.data ? 'Data present (hidden for brevity)' : 'No data',
-            url: error.config?.url
-        });
-    }
+    console.error(`[BOC Backend] Failed to fetch ${currencyCode}:`, details);
 
     return res.status(statusCode).json({
-      error: statusCode >= 500 ? '无法从中国银行获取数据' : details,
+      error: statusCode >= 500 ? '无法获取数据' : details,
       details,
       code: error?.code,
     });

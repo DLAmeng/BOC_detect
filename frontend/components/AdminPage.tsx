@@ -169,17 +169,57 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                     数据源设置
                 </h3>
 
-                <div className="bg-gray-950 p-4 md:p-5 rounded-lg border border-gray-800">
-                    <div className="flex items-center gap-3 md:gap-4">
-                        <div className="p-2 md:p-3 rounded-lg bg-blue-900/30">
-                            <Server className="w-5 h-5 md:w-6 md:h-6 text-blue-400" />
+                <div className="bg-gray-950 p-4 md:p-5 rounded-lg border border-gray-800 space-y-4">
+                    <div className="flex items-center justify-between gap-3 md:gap-4">
+                        <div className="flex items-center gap-3 md:gap-4">
+                            <div className="p-2 md:p-3 rounded-lg bg-blue-900/30">
+                                <Server className="w-5 h-5 md:w-6 md:h-6 text-blue-400" />
+                            </div>
+                            <div>
+                                <p className="text-sm md:text-base font-medium text-gray-200">汇率获取源</p>
+                                <p className="text-[10px] md:text-sm text-gray-500 mt-0.5 md:mt-1">
+                                    你可以选择从中国银行官网抓取（周末不更新），或是通过 Yahoo Finance 抓取（全球实时）。
+                                </p>
+                            </div>
                         </div>
-                        <div>
-                            <p className="text-sm md:text-base font-medium text-gray-200">真实后端模式</p>
-                            <p className="text-[10px] md:text-sm text-gray-500 mt-0.5 md:mt-1">
-                                前端会按选中的币种逐个请求 `/api/rates`，从 Node.js 后端抓取中国银行官网实时汇率。
-                            </p>
-                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-3 mt-4">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setLocalConfig(prev => ({ ...prev, rateSource: 'boc' }));
+                                setIsDirty(true);
+                                setValidationMessage('');
+                                setSaveMessage('');
+                            }}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                                localConfig.rateSource === 'boc' || !localConfig.rateSource
+                                    ? 'bg-blue-500/20 border-blue-500 text-blue-300'
+                                    : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300'
+                            }`}
+                        >
+                            <div className={`w-2 h-2 rounded-full ${localConfig.rateSource === 'boc' || !localConfig.rateSource ? 'bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.8)]' : 'bg-transparent border border-gray-500'}`} />
+                            中国银行网页抓取 (BOC)
+                        </button>
+                        
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setLocalConfig(prev => ({ ...prev, rateSource: 'yahoo' }));
+                                setIsDirty(true);
+                                setValidationMessage('');
+                                setSaveMessage('');
+                            }}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                                localConfig.rateSource === 'yahoo'
+                                    ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                                    : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300'
+                            }`}
+                        >
+                            <div className={`w-2 h-2 rounded-full ${localConfig.rateSource === 'yahoo' ? 'bg-purple-400 shadow-[0_0_8px_rgba(192,132,252,0.8)]' : 'bg-transparent border border-gray-500'}`} />
+                            雅虎财经 (Yahoo Finance)
+                        </button>
                     </div>
                 </div>
             </div>

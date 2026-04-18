@@ -31,6 +31,7 @@ export interface SystemConfig {
     webhookUrl: string;
     telegramBotToken: string;
     telegramChatId: string;
+    rateSource?: string;
 }
 
 export interface SystemState {
