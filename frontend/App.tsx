@@ -260,6 +260,9 @@ const App: React.FC = () => {
                 }
             }
 
+            // Telegram notifications are now handled exclusively by the backend background worker
+            // to avoid duplicate alerts and ensure monitoring works even when the dashboard is closed.
+            /*
             if (notificationMessages.length > 0) {
                 try {
                     const result = await sendTelegramNotifications({
@@ -277,6 +280,7 @@ const App: React.FC = () => {
                     );
                 }
             }
+            */
 
             setState((prev: SystemState) => {
                 const liveCurrencies = prev.config.monitoredCurrencies;

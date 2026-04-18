@@ -549,7 +549,8 @@ const evaluateTargetAlerts = async (rateRecord, currencyConfig, botToken, chatId
   
   global.lastAlertedRates[currencyConfig.currency] = rateRecord.calculatedRate;
   
-  const message = `🔔 [${rateRecord.currencyName} 到价提醒]\n\n当前实时汇率：¥${rateRecord.calculatedRate}\n目标阈值：¥${currencyConfig.targetRate}\n\n更新时间：${rateRecord.pubTime}\n来源：${rateRecord.source === 'Yahoo Finance' ? 'Yahoo Finance' : '中国银行'}`;
+  const sourceName = rateRecord.source === 'Yahoo + BOC' ? 'Yahoo Finance' : rateRecord.source;
+  const message = `🔔 [${rateRecord.currencyName} 到价提醒]\n\n当前实时汇率：¥${rateRecord.calculatedRate}\n目标阈值：¥${currencyConfig.targetRate.toFixed(4)}\n\n更新时间：${rateRecord.pubTime}\n来源：${sourceName}`;
   
   console.log(`[BOC Backend Background] Target hit for ${rateRecord.currency}, sending alert...`);
   

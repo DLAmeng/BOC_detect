@@ -17,6 +17,7 @@ export const processRateData = (
     const calculatedRate = newRateData.calculatedRate;
     const rawRate = newRateData.rawSellingRate;
     const pubTime = newRateData.pubTime;
+    const source = newRateData.source === 'Yahoo + BOC' ? 'Yahoo Finance' : (newRateData.source || 'BOC');
 
     // 1. Check for Target Hit
     if (calculatedRate <= currencyConfig.targetRate) {
@@ -28,7 +29,7 @@ export const processRateData = (
                 type: 'target_hit',
                 timestamp: fetchTime,
                 read: false,
-                message: `[BOC ${currency}/CNY 到价提醒]\n当前汇率: ${calculatedRate.toFixed(4)}\n目标阈值: ${currencyConfig.targetRate.toFixed(4)}\nSelling Rate(100 ${currency}): ${rawRate.toFixed(2)}\nPub Time: ${pubTime}`
+                message: `🔔 [${currency}/CNY 到价提醒]\n当前汇率: ${calculatedRate.toFixed(4)}\n目标阈值: ${currencyConfig.targetRate.toFixed(4)}\n数据来源: ${source}\n发布时间: ${pubTime}`
             });
             updatedLastAlertedRate = calculatedRate;
         }
@@ -46,7 +47,7 @@ export const processRateData = (
                 type: 'update',
                 timestamp: fetchTime,
                 read: false,
-                message: `[BOC ${currency}/CNY 更新]\nSelling Rate(100 ${currency}): ${rawRate.toFixed(2)}\n换算后(1 ${currency}): ${calculatedRate.toFixed(4)}\n上次值: ${currentState.calculatedRate.toFixed(4)}\nPub Time: ${pubTime}\n抓取时间: ${fetchTime}`
+                message: `📈 [${currency}/CNY 更新]\n当前汇率: ${calculatedRate.toFixed(4)}\n上次值: ${currentState.calculatedRate.toFixed(4)}\n数据来源: ${source}\n发布时间: ${pubTime}`
             });
         }
     } else {
@@ -57,7 +58,7 @@ export const processRateData = (
             type: 'update',
             timestamp: fetchTime,
             read: false,
-            message: `[BOC ${currency}/CNY 初始抓取]\nSelling Rate(100 ${currency}): ${rawRate.toFixed(2)}\n换算后(1 ${currency}): ${calculatedRate.toFixed(4)}\nPub Time: ${pubTime}\n抓取时间: ${fetchTime}`
+            message: `📡 [${currency}/CNY 初始抓取]\n当前汇率: ${calculatedRate.toFixed(4)}\n数据来源: ${source}\n发布时间: ${pubTime}`
         });
     }
 
@@ -71,7 +72,7 @@ export const createErrorAlert = (currency: string, errorMessage: string): AlertL
         type: 'error',
         timestamp: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
         read: false,
-        message: `[BOC ${currency}/CNY 监控异常]\n原因: ${errorMessage}\n抓取时间: ${format(new Date(), 'yyyy-MM-dd HH:mm:ss')}`
+        message: `❌ [${currency}/CNY 监控异常]\n原因: ${errorMessage}\n时间: ${format(new Date(), 'yyyy-MM-dd HH:mm:ss')}`
     };
 };
 
