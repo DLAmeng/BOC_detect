@@ -34,7 +34,7 @@ const RANGES: { value: TimeRange; label: string }[] = [
 ];
 
 export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) => {
-    const [timeRange, setTimeRange] = useState<TimeRange>('session');
+    const [timeRange, setTimeRange] = useState<TimeRange>('1h');
     const [persistedHistory, setPersistedHistory] = useState<RateData[]>([]);
     const [historyError, setHistoryError] = useState<string | null>(null);
     const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -80,10 +80,13 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
     );
 
     const now = Date.now();
+    // Default to '7d' if session has only recent items (e.g. initial load) to make chart useful
+    const actualTimeRange = timeRange === 'session' ? '7d' : timeRange;
+    
     const displayData =
-        timeRange === 'session'
+        actualTimeRange === 'session' // Left for explicit session views if needed
             ? mergedHistory
-            : mergedHistory.filter((item) => now - item.fetchTimestampMs <= RANGE_WINDOWS[timeRange]);
+            : mergedHistory.filter((item) => now - item.fetchTimestampMs <= RANGE_WINDOWS[actualTimeRange]);
 
     if (isLoadingHistory && mergedHistory.length === 0) {
         return (
