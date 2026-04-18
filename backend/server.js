@@ -446,6 +446,7 @@ app.get('/api/config', async (req, res) => {
 app.put('/api/config', async (req, res) => {
   try {
     const config = await saveMonitorConfig(req.body);
+    restartBackgroundWorker(); // Refresh the interval dynamically when settings change
     return res.json({ success: true, config });
   } catch (error) {
     console.error('[BOC Backend] Failed to save config:', error);
@@ -529,6 +530,87 @@ app.get('/api/rates', async (req, res) => {
   }
 });
 
+// Background Worker System
+let currentTimerId = null;
+
+const evaluateTargetAlerts = async (rateRecord, currencyConfig, botToken, chatId) => {
+  if (!botToken || !chatId || !currencyConfig.targetRate || rateRecord.calculatedRate > currencyConfig.targetRate) {
+    return;
+  }
+  
+  // Store the last alerted rates in memory to avoid duplicate alerts in same session
+  // In a more robust system, this should be stored in file or DB.
+  global.lastAlertedRates = global.lastAlertedRates || {};
+  const previousAlertRate = global.lastAlertedRates[currencyConfig.currency];
+  
+  if (previousAlertRate === rateRecord.calculatedRate) {
+    return; // Already alerted for this exact rate
+  }
+  
+  global.lastAlertedRates[currencyConfig.currency] = rateRecord.calculatedRate;
+  
+  const message = `🔔 [${rateRecord.currencyName} 到价提醒]\n\n当前实时汇率：¥${rateRecord.calculatedRate}\n目标阈值：¥${currencyConfig.targetRate}\n\n更新时间：${rateRecord.pubTime}\n来源：${rateRecord.source === 'Yahoo Finance' ? 'Yahoo Finance' : '中国银行'}`;
+  
+  console.log(`[BOC Backend Background] Target hit for ${rateRecord.currency}, sending alert...`);
+  
+  try {
+    await sendTelegramMessages({
+      botToken,
+      chatId,
+      messages: [message],
+    });
+  } catch (err) {
+    console.error(`[BOC Backend Background] Failed to send telegram alert for ${rateRecord.currency}:`, err.message);
+  }
+};
+
+const runBackgroundCheck = async () => {
+  try {
+    const config = await loadMonitorConfig();
+    
+    if (!config.isRunning || !config.monitoredCurrencies || config.monitoredCurrencies.length === 0) {
+      return;
+    }
+    
+    const rateSource = config.rateSource || 'boc';
+    const botToken = config.telegramBotToken || TELEGRAM_BOT_TOKEN;
+    const chatId = config.telegramChatId || TELEGRAM_CHAT_ID;
+    
+    for (const currencyConfig of config.monitoredCurrencies) {
+      try {
+        const rateRecord = await fetchRateRecord(currencyConfig.currency, rateSource);
+        await recordRateHistory(rateRecord);
+        await evaluateTargetAlerts(rateRecord, currencyConfig, botToken, chatId);
+      } catch (error) {
+        console.error(`[BOC Backend Background] Error checking ${currencyConfig.currency}:`, error.message);
+      }
+      
+      // Delay between currencies to avoid overwhelming the source
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+  } catch (error) {
+    console.error('[BOC Backend Background] Cycle failed:', error.message);
+  }
+};
+
+const restartBackgroundWorker = async () => {
+  if (currentTimerId) {
+    clearInterval(currentTimerId);
+    currentTimerId = null;
+  }
+  
+  const config = await loadMonitorConfig();
+  
+  if (config.isRunning && config.checkIntervalSeconds >= 10) {
+    console.log(`[BOC Backend Background] Starting background worker... Interval: ${config.checkIntervalSeconds}s`);
+    runBackgroundCheck(); // Run immediately once
+    currentTimerId = setInterval(runBackgroundCheck, config.checkIntervalSeconds * 1000);
+  } else {
+    console.log(`[BOC Backend Background] Worker is stopped or disabled by config.`);
+  }
+};
+
 app.post('/api/notify/telegram', async (req, res) => {
   const botToken = `${req.body?.botToken || TELEGRAM_BOT_TOKEN}`.trim();
   const chatId = `${req.body?.chatId || TELEGRAM_CHAT_ID}`.trim();
@@ -580,6 +662,7 @@ app.post('/api/notify/telegram', async (req, res) => {
 });
 
 await loadHistoryStore();
+restartBackgroundWorker();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log('=================================================');
