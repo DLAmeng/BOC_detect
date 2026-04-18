@@ -108,12 +108,16 @@ export const DashboardCard: React.FC<Props> = ({
 
             <div className="grid grid-cols-2 gap-2 md:gap-4 pt-4 md:pt-6 border-t border-gray-800">
                 <div>
-                    <p className="text-gray-500 text-[10px] md:text-xs mb-1">原始卖出价 (100 {currency})</p>
-                    <p className="text-gray-300 font-mono text-base md:text-lg">{currentRate.rawSellingRate.toFixed(2)}</p>
-                    <p className="text-gray-600 text-[10px] md:text-xs mt-0.5 md:mt-1 font-mono">÷ 100 = {currentRate.calculatedRate.toFixed(4)}</p>
+                    <p className="text-gray-500 text-[10px] md:text-xs mb-1">中行实时参考</p>
+                    <p className="text-amber-500/90 font-mono text-base md:text-lg">
+                        {currentRate.bocRate ? `¥${currentRate.bocRate.toFixed(4)}` : '暂无数据'}
+                    </p>
+                    <p className="text-gray-600 text-[10px] md:text-xs mt-0.5 md:mt-1 font-mono">
+                        {currentRate.bocRawRate ? `原始: ${currentRate.bocRawRate.toFixed(2)}` : '同步抓取中...'}
+                    </p>
                 </div>
                 <div>
-                    <p className="text-gray-500 text-[10px] md:text-xs mb-1">目标阈值</p>
+                    <p className="text-gray-500 text-[10px] md:text-xs mb-1">目标阈值 (Yahoo)</p>
                     <p className="text-gray-300 font-mono text-base md:text-lg">≤ {targetRate.toFixed(4)}</p>
                 </div>
             </div>

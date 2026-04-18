@@ -3,9 +3,12 @@ export interface RateData {
     currencyName?: string;
     rawSellingRate: number; // e.g., 468.25 (per 100 units)
     calculatedRate: number; // e.g., 4.6825 (per 1 unit)
+    bocRate?: number;       // The synchronized BOC rate (e.g. 4.6825)
+    bocRawRate?: number;    // The synchronized BOC raw rate (e.g. 468.25)
     pubTime: string;
     fetchTime: string;
     fetchTimestampMs: number;
+    source?: string;
 }
 
 export type AlertType = 'update' | 'target_hit' | 'error' | 'info';
@@ -31,7 +34,6 @@ export interface SystemConfig {
     webhookUrl: string;
     telegramBotToken: string;
     telegramChatId: string;
-    rateSource?: string;
 }
 
 export interface SystemState {

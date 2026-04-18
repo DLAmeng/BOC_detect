@@ -20,8 +20,7 @@ const DEFAULT_MONITOR_CONFIG = {
   isRunning: true,
   webhookUrl: '',
   telegramBotToken: '',
-  telegramChatId: '',
-  rateSource: 'boc' // 'boc' or 'yahoo'
+  telegramChatId: ''
 };
 
 const PORT = Number(process.env.PORT || process.env.API_BACKEND_PORT || 3001);
@@ -63,6 +62,7 @@ const REQUEST_HEADERS = {
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
   'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+  'Referer': 'https://www.boc.cn/sourcedb/whpj/',
   'Connection': 'keep-alive',
   'Upgrade-Insecure-Requests': '1',
   'Sec-Fetch-Dest': 'document',
@@ -124,11 +124,6 @@ const saveMonitorConfig = async (newConfig) => {
     configToSave.webhookUrl = newConfig.webhookUrl != null ? String(newConfig.webhookUrl) : DEFAULT_MONITOR_CONFIG.webhookUrl;
     configToSave.telegramBotToken = newConfig.telegramBotToken != null ? String(newConfig.telegramBotToken) : DEFAULT_MONITOR_CONFIG.telegramBotToken;
     configToSave.telegramChatId = newConfig.telegramChatId != null ? String(newConfig.telegramChatId) : DEFAULT_MONITOR_CONFIG.telegramChatId;
-    
-    // 4. rateSource
-    configToSave.rateSource = ['boc', 'yahoo'].includes(newConfig.rateSource) 
-      ? newConfig.rateSource 
-      : DEFAULT_MONITOR_CONFIG.rateSource;
     
     // 4. monitoredCurrencies
     if (Array.isArray(newConfig.monitoredCurrencies)) {
@@ -266,15 +261,17 @@ const loadHistoryStore = async () => {
 const findCurrencyRow = ($, currencyName) => {
   let matchedRow = null;
 
-  $('table tr').each((_, row) => {
+  // Use more specific selector for the price table
+  $('#priceTable tr, .BOC_main table tr').each((_, row) => {
     const cells = $(row).find('td');
-    if (cells.length < 8) {
+    if (cells.length < 6) { // BOC table sometimes has fewer cells in mobile or certain views, but at least 6 for main data
       return;
     }
 
     const name = $(cells[0]).text().trim();
     if (name === currencyName) {
       matchedRow = cells;
+      return false; // Break loop
     }
   });
 
@@ -287,7 +284,7 @@ const httpsAgent = new https.Agent({
   keepAlive: true
 });
 
-const fetchRateRecord = async (currencyCode, rateSource) => {
+const fetchRateRecord = async (currencyCode) => {
   const currencyName = CURRENCY_MAP[currencyCode];
 
   if (!currencyName) {
@@ -296,95 +293,88 @@ const fetchRateRecord = async (currencyCode, rateSource) => {
     throw error;
   }
 
-  if (rateSource === 'yahoo') {
-    // Yahoo Finance fetcher logic
-    const fetchTimestampMs = Date.now();
-    const fetchTime = formatDateTime();
+  // Define fetchers for concurrent execution
+  const fetchYahoo = async () => {
     const symbol = `${currencyCode}CNY=X`;
     const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?region=US&lang=en-US&includePrePost=false&interval=2m&useYfid=true&range=1d&corsDomain=finance.yahoo.com&.tsrc=finance`;
     
-    try {
-      const response = await axios.get(yahooUrl, {
-        timeout: REQUEST_TIMEOUT_MS,
-        httpsAgent,
-      });
-      
-      const result = response.data?.chart?.result?.[0];
-      if (!result || !result.meta || !result.meta.regularMarketPrice) {
-        throw new Error('Yahoo Finance 数据结构异常');
-      }
-
-      const calculatedRate = result.meta.regularMarketPrice; // Yahoo gives 1 foreign = X CNY
-      const rawSellingRate = calculatedRate * 100; // Mock BOC format per 100
-      
-      // Use standard format for pubTime
-      const pubDateObj = new Date(result.meta.regularMarketTime * 1000 || fetchTimestampMs);
-      const pubTime = formatDateTime(pubDateObj);
-
-      return {
-        currency: currencyCode,
-        currencyName,
-        rawSellingRate: Number(rawSellingRate.toFixed(2)),
-        calculatedRate: Number(calculatedRate.toFixed(4)),
-        pubTime,
-        fetchTime,
-        fetchTimestampMs,
-        source: 'Yahoo Finance',
-      };
-    } catch (error) {
-      const e = new Error(`从 Yahoo Finance 获取 ${currencyName} 失败`);
-      e.statusCode = 502;
-      throw e;
-    }
-  } else {
-    // Default BOC fetcher logic
-    const urlWithCacheBuster = BOC_SOURCE_URL + (BOC_SOURCE_URL.includes('?') ? '&' : '?') + `_t=${Date.now()}`;
-    let response;
+    const response = await axios.get(yahooUrl, {
+      timeout: REQUEST_TIMEOUT_MS,
+      httpsAgent,
+    });
     
-    try {
-      response = await axios.get(urlWithCacheBuster, {
-        headers: REQUEST_HEADERS,
-        responseType: 'text',
-        timeout: REQUEST_TIMEOUT_MS,
-        httpsAgent,
-      });
-    } catch (err) {
-      throw err;
+    const result = response.data?.chart?.result?.[0];
+    if (!result || !result.meta || !result.meta.regularMarketPrice) {
+      throw new Error('Yahoo Finance 数据结构异常');
     }
+
+    const calculatedRate = result.meta.regularMarketPrice;
+    const pubDateObj = new Date(result.meta.regularMarketTime * 1000 || Date.now());
+    
+    return {
+      calculatedRate: Number(calculatedRate.toFixed(4)),
+      pubTime: formatDateTime(pubDateObj),
+    };
+  };
+
+  const fetchBoc = async () => {
+    const urlWithCacheBuster = BOC_SOURCE_URL + (BOC_SOURCE_URL.includes('?') ? '&' : '?') + `_t=${Date.now()}`;
+    const response = await axios.get(urlWithCacheBuster, {
+      headers: REQUEST_HEADERS,
+      responseType: 'text',
+      timeout: REQUEST_TIMEOUT_MS,
+      httpsAgent,
+    });
 
     const $ = cheerio.load(response.data);
     const row = findCurrencyRow($, currencyName);
 
     if (!row) {
-      const error = new Error(`未在中国银行页面上找到 ${currencyName} 的数据`);
-      error.statusCode = 404;
-      throw error;
+      throw new Error(`未在中行页面找到 ${currencyName}`);
     }
 
     const rawSellingRate = Number.parseFloat($(row[3]).text().trim());
-    const pubDate = $(row[6]).text().trim();
-    const pubTime = $(row[7]).text().trim();
-    const publicationTime = pubDate.includes(':') ? pubDate : `${pubDate} ${pubTime}`.trim();
-    const fetchTime = formatDateTime();
-    const fetchTimestampMs = Date.now();
-
-    if (!Number.isFinite(rawSellingRate) || !publicationTime) {
-      const error = new Error(`已找到 ${currencyName}，但页面结构异常，无法解析汇率`);
-      error.statusCode = 502;
-      throw error;
+    if (!Number.isFinite(rawSellingRate)) {
+      throw new Error(`无法解析中行 ${currencyName} 汇率`);
     }
 
     return {
-      currency: currencyCode,
-      currencyName,
       rawSellingRate,
       calculatedRate: Number((rawSellingRate / 100).toFixed(4)),
-      pubTime: publicationTime,
-      fetchTime,
-      fetchTimestampMs,
-      source: BOC_SOURCE_URL,
     };
+  };
+
+  // Run both fetchers concurrently
+  const [yahooRes, bocRes] = await Promise.allSettled([fetchYahoo(), fetchBoc()]);
+
+  if (yahooRes.status === 'rejected') {
+    console.error(`[BOC Backend] Yahoo fetch failed for ${currencyCode}:`, yahooRes.reason.message);
+    throw new Error(`从 Yahoo Finance 获取 ${currencyName} 失败: ${yahooRes.reason.message}`);
   }
+
+  const fetchTimestampMs = Date.now();
+  const fetchTime = formatDateTime();
+  const yahooData = yahooRes.value;
+
+  const record = {
+    currency: currencyCode,
+    currencyName,
+    rawSellingRate: Number((yahooData.calculatedRate * 100).toFixed(2)), // Main raw rate derived from primary source
+    calculatedRate: yahooData.calculatedRate, // Yahoo is primary
+    pubTime: yahooData.pubTime,
+    fetchTime,
+    fetchTimestampMs,
+    source: 'Yahoo + BOC',
+  };
+
+  if (bocRes.status === 'fulfilled') {
+    record.bocRate = bocRes.value.calculatedRate;
+    record.bocRawRate = bocRes.value.rawSellingRate;
+  } else {
+    console.warn(`[BOC Backend] BOC fetch failed for ${currencyCode} (using Yahoo only):`, bocRes.reason.message);
+  }
+
+  return record;
 };
 
 const recordRateHistory = async (rateRecord) => {
@@ -466,6 +456,19 @@ app.get('/api/health', async (_req, res) => {
   });
 });
 
+app.post('/api/history/reload', async (req, res) => {
+  try {
+    console.log('[BOC Backend] Reloading history store from disk...');
+    historyStore = null;
+    historyLoadPromise = null;
+    await loadHistoryStore();
+    return res.json({ success: true, message: '历史数据缓存已刷新' });
+  } catch (error) {
+    console.error('[BOC Backend] Failed to reload history store:', error);
+    return res.status(500).json({ success: false, error: '刷新历史数据失败' });
+  }
+});
+
 app.get('/api/history', async (req, res) => {
   const currencyCode = `${req.query.currency || 'AUD'}`.toUpperCase();
   const currencyName = CURRENCY_MAP[currencyCode];
@@ -504,10 +507,7 @@ app.get('/api/rates', async (req, res) => {
   }
 
   try {
-    const config = await loadMonitorConfig();
-    const rateSource = config.rateSource || 'boc';
-    
-    const rateRecord = await fetchRateRecord(currencyCode, rateSource);
+    const rateRecord = await fetchRateRecord(currencyCode);
 
     try {
       await recordRateHistory(rateRecord);
@@ -572,13 +572,12 @@ const runBackgroundCheck = async () => {
       return;
     }
     
-    const rateSource = config.rateSource || 'boc';
     const botToken = config.telegramBotToken || TELEGRAM_BOT_TOKEN;
     const chatId = config.telegramChatId || TELEGRAM_CHAT_ID;
     
     for (const currencyConfig of config.monitoredCurrencies) {
       try {
-        const rateRecord = await fetchRateRecord(currencyConfig.currency, rateSource);
+        const rateRecord = await fetchRateRecord(currencyConfig.currency);
         await recordRateHistory(rateRecord);
         await evaluateTargetAlerts(rateRecord, currencyConfig, botToken, chatId);
       } catch (error) {

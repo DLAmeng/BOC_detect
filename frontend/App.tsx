@@ -24,8 +24,7 @@ const INITIAL_CONFIG: SystemConfig = {
     isRunning: true,
     webhookUrl: '',
     telegramBotToken: '',
-    telegramChatId: '',
-    rateSource: 'boc'
+    telegramChatId: ''
 };
 
 const STORAGE_KEY = 'boc_monitor_config';
@@ -41,7 +40,7 @@ const loadConfigFromStorage = (): SystemConfig => {
     }
 };
 
-const MAX_HISTORY_POINTS = 2000;
+const MAX_HISTORY_POINTS = 10000;
 
 const getCurrencyCodes = (monitoredCurrencies: MonitoredCurrencyConfig[]) =>
     monitoredCurrencies.map((item) => item.currency);
@@ -173,7 +172,7 @@ const App: React.FC = () => {
             if (initialLoadedRef.current.has(cfg.currency)) return;
             initialLoadedRef.current.add(cfg.currency);
             try {
-                const history = await fetchRateHistory(cfg.currency, 2000);
+                const history = await fetchRateHistory(cfg.currency, 10000);
                 if (history.length === 0) return;
                 const latest = history[history.length - 1];
                 setState((prev: SystemState) => {

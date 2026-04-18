@@ -29,6 +29,8 @@ const normalizeRateData = (data: any): RateData => {
                 ? data.calculatedRate
                 : (rawRate / 100).toFixed(4)
         ),
+        bocRate: data.bocRate,
+        bocRawRate: data.bocRawRate,
         pubTime: data.pubTime,
         fetchTime: data.fetchTime || formatDateTime(fetchTimestampMs),
         fetchTimestampMs

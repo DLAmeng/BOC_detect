@@ -155,6 +155,15 @@ async function run() {
   }
 
   console.log('Done!');
+
+  // Notify backend to reload history cache
+  try {
+    const port = process.env.PORT || process.env.API_BACKEND_PORT || 3001;
+    await axios.post(`http://127.0.0.1:${port}/api/history/reload`);
+    console.log('[History Fetcher] Notified backend to reload history cache.');
+  } catch (error) {
+    console.log('[History Fetcher] Note: Could not notify backend to reload cache (is it running?). You may need to restart the backend to see historical data.');
+  }
 }
 
 run();
