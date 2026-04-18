@@ -62,6 +62,13 @@ const REQUEST_HEADERS = {
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
   'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+  'Connection': 'keep-alive',
+  'Upgrade-Insecure-Requests': '1',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Cache-Control': 'max-age=0'
 };
 
 let historyStore = null;
@@ -268,6 +275,12 @@ const findCurrencyRow = ($, currencyName) => {
   return matchedRow;
 };
 
+import https from 'node:https';
+const httpsAgent = new https.Agent({
+  rejectUnauthorized: false,
+  keepAlive: true
+});
+
 const fetchRateRecord = async (currencyCode) => {
   const currencyName = CURRENCY_MAP[currencyCode];
 
@@ -276,11 +289,15 @@ const fetchRateRecord = async (currencyCode) => {
     error.statusCode = 400;
     throw error;
   }
+  
+  // Use a custom interceptor or logic for retry if needed, but adding a random query string helps bypass cache on server
+  const urlWithCacheBuster = BOC_SOURCE_URL + (BOC_SOURCE_URL.includes('?') ? '&' : '?') + `_t=${Date.now()}`;
 
-  const response = await axios.get(BOC_SOURCE_URL, {
+  const response = await axios.get(urlWithCacheBuster, {
     headers: REQUEST_HEADERS,
     responseType: 'text',
     timeout: REQUEST_TIMEOUT_MS,
+    httpsAgent,
   });
 
   const $ = cheerio.load(response.data);
