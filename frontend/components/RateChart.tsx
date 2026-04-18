@@ -3,7 +3,7 @@ import { RateData } from '../types.ts';
 import { fetchRateHistory } from '../utils/api.ts';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 
-type TimeRange = '24h' | '7d' | '30d' | '1y';
+type TimeRange = '24h' | '7d' | '14d' | '30d' | '3m' | '6m' | '1y';
 
 interface Props {
     history: RateData[];
@@ -17,15 +17,21 @@ const DAY_MS = 24 * HOUR_MS;
 const RANGE_WINDOWS: Record<TimeRange, number> = {
     '24h': 24 * HOUR_MS,
     '7d': 7 * DAY_MS,
+    '14d': 14 * DAY_MS,
     '30d': 30 * DAY_MS,
+    '3m': 90 * DAY_MS,
+    '6m': 180 * DAY_MS,
     '1y': 365 * DAY_MS,
 };
 
 const RANGES: { value: TimeRange; label: string }[] = [
-    { value: '24h', label: '24 小时' },
-    { value: '7d', label: '7 天' },
-    { value: '30d', label: '30 天' },
-    { value: '1y', label: '1 年' },
+    { value: '24h', label: '24H' },
+    { value: '7d', label: '7D' },
+    { value: '14d', label: '14D' },
+    { value: '30d', label: '30D' },
+    { value: '3m', label: '3M' },
+    { value: '6m', label: '6M' },
+    { value: '1y', label: '1Y' },
 ];
 
 export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) => {
@@ -146,7 +152,7 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
         );
     }
 
-    const useDayLabel = timeRange === '7d' || timeRange === '30d' || timeRange === '1y';
+    const useDayLabel = timeRange !== '24h';
     const chartData = displayData.map((item) => {
         let yahooRate: number | undefined = item.calculatedRate;
         let bocRate: number | undefined = item.bocRate;
