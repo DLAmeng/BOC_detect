@@ -293,12 +293,21 @@ const fetchRateRecord = async (currencyCode) => {
   // Use a custom interceptor or logic for retry if needed, but adding a random query string helps bypass cache on server
   const urlWithCacheBuster = BOC_SOURCE_URL + (BOC_SOURCE_URL.includes('?') ? '&' : '?') + `_t=${Date.now()}`;
 
-  const response = await axios.get(urlWithCacheBuster, {
-    headers: REQUEST_HEADERS,
-    responseType: 'text',
-    timeout: REQUEST_TIMEOUT_MS,
-    httpsAgent,
-  });
+  console.log(`[BOC Backend - Fetcher] Executing GET request to ${urlWithCacheBuster}`);
+  
+  let response;
+  try {
+    response = await axios.get(urlWithCacheBuster, {
+      headers: REQUEST_HEADERS,
+      responseType: 'text',
+      timeout: REQUEST_TIMEOUT_MS,
+      httpsAgent,
+    });
+    console.log(`[BOC Backend - Fetcher] Response received. Status: ${response.status}, Data Length: ${response.data?.length || 0}`);
+  } catch (err) {
+    console.error(`[BOC Backend - Fetcher] Axios GET failed. Is Axios Error? ${axios.isAxiosError(err)}`);
+    throw err;
+  }
 
   const $ = cheerio.load(response.data);
   const row = findCurrencyRow($, currencyName);
@@ -450,22 +459,38 @@ app.get('/api/rates', async (req, res) => {
   }
 
   try {
+    console.log(`[BOC Backend] Attempting to fetch real-time data for: ${currencyCode}`);
     const rateRecord = await fetchRateRecord(currencyCode);
+    console.log(`[BOC Backend] Successfully fetched data for ${currencyCode}. PubTime: ${rateRecord.pubTime}, Rate: ${rateRecord.calculatedRate}`);
 
     try {
       await recordRateHistory(rateRecord);
     } catch (historyError) {
-      console.error('[BOC Backend] Failed to persist history:', historyError);
+      console.error(`[BOC Backend] Failed to persist history for ${currencyCode}:`, historyError);
     }
 
     return res.json(rateRecord);
   } catch (error) {
     const statusCode = error?.statusCode || 500;
     const details = error instanceof Error ? error.message : '未知错误';
-    console.error(`[BOC Backend] Failed to fetch ${currencyCode}:`, details);
+    const trace = error?.stack || 'No stack trace';
+    
+    console.error(`[BOC Backend] Failed to fetch ${currencyCode}. StatusCode: ${statusCode}. Details:`, details);
+    console.error(`[BOC Backend] Error Trace for ${currencyCode}:`, trace);
+    
+    if (axios.isAxiosError(error)) {
+        console.error(`[BOC Backend] Axios Error specifics for ${currencyCode}:`, {
+            code: error.code,
+            responseStatus: error.response?.status,
+            responseData: error.response?.data ? 'Data present (hidden for brevity)' : 'No data',
+            url: error.config?.url
+        });
+    }
+
     return res.status(statusCode).json({
       error: statusCode >= 500 ? '无法从中国银行获取数据' : details,
       details,
+      code: error?.code,
     });
   }
 });

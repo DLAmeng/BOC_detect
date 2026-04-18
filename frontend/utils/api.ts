@@ -37,17 +37,20 @@ const normalizeRateData = (data: any): RateData => {
 
 export const fetchRealRate = async (currency: string): Promise<RateData> => {
     try {
+        console.log(`[Frontend] Fetching real rate for ${currency}...`);
         const response = await fetch(`${getApiBaseUrl()}/rates?currency=${encodeURIComponent(currency)}`);
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
+            console.error(`[Frontend] Fetch real rate for ${currency} failed with status: ${response.status}`, errorData);
             throw new Error(errorData.error || errorData.details || `HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
+        console.log(`[Frontend] Fetch real rate for ${currency} successful`, data);
         return normalizeRateData(data);
     } catch (error) {
-        console.error('Failed to fetch real rate:', error);
+        console.error(`[Frontend] Failed to fetch real rate for ${currency}:`, error);
         throw error;
     }
 };
