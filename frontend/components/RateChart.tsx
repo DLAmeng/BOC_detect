@@ -3,7 +3,7 @@ import { RateData } from '../types.ts';
 import { fetchRateHistory } from '../utils/api.ts';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 
-type TimeRange = 'session' | '1h' | '6h' | '24h' | '7d' | '30d' | '1y';
+type TimeRange = '24h' | '7d' | '30d' | '1y';
 
 interface Props {
     history: RateData[];
@@ -14,9 +14,7 @@ interface Props {
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-const RANGE_WINDOWS: Record<Exclude<TimeRange, 'session'>, number> = {
-    '1h': HOUR_MS,
-    '6h': 6 * HOUR_MS,
+const RANGE_WINDOWS: Record<TimeRange, number> = {
     '24h': 24 * HOUR_MS,
     '7d': 7 * DAY_MS,
     '30d': 30 * DAY_MS,
@@ -24,9 +22,6 @@ const RANGE_WINDOWS: Record<Exclude<TimeRange, 'session'>, number> = {
 };
 
 const RANGES: { value: TimeRange; label: string }[] = [
-    { value: 'session', label: '当前会话' },
-    { value: '1h', label: '1 小时' },
-    { value: '6h', label: '6 小时' },
     { value: '24h', label: '24 小时' },
     { value: '7d', label: '7 天' },
     { value: '30d', label: '30 天' },
@@ -34,7 +29,7 @@ const RANGES: { value: TimeRange; label: string }[] = [
 ];
 
 export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) => {
-    const [timeRange, setTimeRange] = useState<TimeRange>('1h');
+    const [timeRange, setTimeRange] = useState<TimeRange>('24h');
     const [persistedHistory, setPersistedHistory] = useState<RateData[]>([]);
     const [historyError, setHistoryError] = useState<string | null>(null);
     const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -80,13 +75,7 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
     );
 
     const now = Date.now();
-    // Default to '7d' if session has only recent items (e.g. initial load) to make chart useful
-    const actualTimeRange = timeRange === 'session' ? '7d' : timeRange;
-    
-    const displayData =
-        actualTimeRange === 'session' // Left for explicit session views if needed
-            ? mergedHistory
-            : mergedHistory.filter((item) => now - item.fetchTimestampMs <= RANGE_WINDOWS[actualTimeRange]);
+    const displayData = mergedHistory.filter((item) => now - item.fetchTimestampMs <= RANGE_WINDOWS[timeRange]);
 
     if (isLoadingHistory && mergedHistory.length === 0) {
         return (
