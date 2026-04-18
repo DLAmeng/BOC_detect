@@ -40,7 +40,10 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
         const loadHistory = async () => {
             setIsLoadingHistory(true);
             try {
-                const items = await fetchRateHistory(currency, 1500);
+                // Request enough items to show 1-year of history.
+                // 1 year of daily items is ~365. Plus intraday polling data.
+                // We'll ask for max possible limit safely handled by backend (usually 2000-5000 is safe)
+                const items = await fetchRateHistory(currency, 5000);
                 if (isActive) {
                     setPersistedHistory(items);
                     setHistoryError(null);
@@ -66,7 +69,9 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
 
     const mergedMap = new Map<string, RateData>();
     [...persistedHistory, ...history].forEach((item) => {
-        const key = `${item.pubTime}-${item.rawSellingRate}`;
+        // Use fetchTimestampMs as the primary unique key to perfectly handle 
+        // Yahoo's daily data mixing with BOC's intraday data
+        const key = item.fetchTimestampMs.toString();
         mergedMap.set(key, item);
     });
 
