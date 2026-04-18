@@ -5,7 +5,6 @@ import { TrendingDown, TrendingUp, Minus, Clock, RefreshCw, LineChart } from 'lu
 interface Props {
     currentRate: RateData | null;
     previousRate: RateData | null;
-    targetRate: number;
     currency: string;
     isActive?: boolean;
     onSelect?: () => void;
@@ -14,7 +13,6 @@ interface Props {
 export const DashboardCard: React.FC<Props> = ({
     currentRate,
     previousRate,
-    targetRate,
     currency,
     isActive = false,
     onSelect
@@ -47,8 +45,6 @@ export const DashboardCard: React.FC<Props> = ({
         );
     }
 
-    const isTargetHit = currentRate.calculatedRate <= targetRate;
-
     let TrendIcon = Minus;
     let trendColor = 'text-gray-400';
     let diff = 0;
@@ -70,16 +66,14 @@ export const DashboardCard: React.FC<Props> = ({
             className={`bg-gray-900 border rounded-xl p-4 md:p-6 transition-colors duration-500 relative overflow-hidden text-left w-full ${
                 isActive
                     ? 'border-blue-500 shadow-[0_0_0_1px_rgba(59,130,246,0.35)]'
-                    : isTargetHit
-                      ? 'border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.2)]'
-                      : 'border-gray-800'
+                    : 'border-gray-800'
             }`}
         >
             <div className="flex justify-between items-start mb-4 md:mb-6 mt-2">
                 <div>
                     <h2 className="text-gray-400 text-xs md:text-sm font-medium uppercase tracking-wider mb-1">当前汇率 (1 {currency})</h2>
                     <div className="flex items-baseline gap-2 md:gap-3 flex-wrap">
-                        <span className={`text-4xl md:text-5xl font-bold tracking-tight ${isTargetHit ? 'text-green-400' : 'text-white'}`}>
+                        <span className="text-4xl md:text-5xl font-bold tracking-tight text-white">
                             ¥{currentRate.calculatedRate.toFixed(4)}
                         </span>
                         {previousRate && (
@@ -98,11 +92,6 @@ export const DashboardCard: React.FC<Props> = ({
                             <LineChart className="w-3 h-3" /> {isActive ? '图表中' : '查看图表'}
                         </span>
                     )}
-                    {isTargetHit && (
-                        <span className="px-2 py-1 md:px-3 md:py-1 bg-green-500/20 text-green-400 text-[10px] md:text-xs font-bold rounded-full border border-green-500/30 animate-pulse whitespace-nowrap">
-                            达到目标价
-                        </span>
-                    )}
                 </div>
             </div>
 
@@ -117,8 +106,8 @@ export const DashboardCard: React.FC<Props> = ({
                     </p>
                 </div>
                 <div>
-                    <p className="text-gray-500 text-[10px] md:text-xs mb-1">目标阈值 (Yahoo)</p>
-                    <p className="text-gray-300 font-mono text-base md:text-lg">≤ {targetRate.toFixed(4)}</p>
+                    <p className="text-gray-500 text-[10px] md:text-xs mb-1">数据来源</p>
+                    <p className="text-gray-400 font-mono text-sm md:text-base">{currentRate.source || 'Yahoo + BOC'}</p>
                 </div>
             </div>
 

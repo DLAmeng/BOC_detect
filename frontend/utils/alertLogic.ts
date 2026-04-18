@@ -1,4 +1,5 @@
 import { RateData, AlertLog, MonitoredCurrencyConfig } from '../types.ts';
+import { DynamicThresholds } from './rateStats.ts';
 import { format } from 'date-fns';
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
@@ -7,11 +8,10 @@ export const processRateData = (
     newRateData: RateData,
     currentState: RateData | null,
     currencyConfig: MonitoredCurrencyConfig,
-    lastAlertedRate: number | null
-): { alerts: AlertLog[], updatedLastAlertedRate: number | null } => {
+    thresholds: DynamicThresholds | null
+): { alerts: AlertLog[] } => {
     
     const alerts: AlertLog[] = [];
-    let updatedLastAlertedRate = lastAlertedRate;
     const currency = currencyConfig.currency;
     const fetchTime = newRateData.fetchTime;
     const calculatedRate = newRateData.calculatedRate;
@@ -19,23 +19,27 @@ export const processRateData = (
     const pubTime = newRateData.pubTime;
     const source = newRateData.source === 'Yahoo + BOC' ? 'Yahoo Finance' : (newRateData.source || 'BOC');
 
-    // 1. Check for Target Hit
-    if (calculatedRate <= currencyConfig.targetRate) {
-        // Only alert if we haven't alerted yet, OR if the price has dropped further since the last alert
-        if (lastAlertedRate === null || calculatedRate < lastAlertedRate) {
+    // 1. Check for Dynamic Thresholds
+    if (thresholds) {
+        if (calculatedRate <= thresholds.bestZoneUpper) {
             alerts.push({
                 currency,
                 id: generateId(),
                 type: 'target_hit',
                 timestamp: fetchTime,
                 read: false,
-                message: `🔔 [${currency}/CNY 到价提醒]\n当前汇率: ${calculatedRate.toFixed(4)}\n目标阈值: ${currencyConfig.targetRate.toFixed(4)}\n数据来源: ${source}\n发布时间: ${pubTime}`
+                message: `📉 [${currency}] 进入强烈换汇区\n当前汇率: ${calculatedRate.toFixed(4)}\n适合优先换汇 (≤${thresholds.bestZoneUpper.toFixed(4)})`
             });
-            updatedLastAlertedRate = calculatedRate;
+        } else if (calculatedRate <= thresholds.goodZoneUpper) {
+            alerts.push({
+                currency,
+                id: generateId(),
+                type: 'target_hit',
+                timestamp: fetchTime,
+                read: false,
+                message: `✅ [${currency}] 进入适合换汇区\n当前汇率: ${calculatedRate.toFixed(4)}\n可考虑分批换汇 (≤${thresholds.goodZoneUpper.toFixed(4)})`
+            });
         }
-    } else {
-        // Reset alert state if price goes back above target
-        updatedLastAlertedRate = null;
     }
 
     // 2. Check for General Update (if rate or pub time changed)
@@ -62,7 +66,7 @@ export const processRateData = (
         });
     }
 
-    return { alerts, updatedLastAlertedRate };
+    return { alerts };
 };
 
 export const createErrorAlert = (currency: string, errorMessage: string): AlertLog => {

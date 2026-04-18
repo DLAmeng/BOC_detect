@@ -24,12 +24,12 @@ export interface AlertLog {
 
 export interface MonitoredCurrencyConfig {
     currency: string;
-    targetRate: number;
 }
 
 export interface SystemConfig {
     monitoredCurrencies: MonitoredCurrencyConfig[];
     checkIntervalSeconds: number;
+    calculationWindowDays: number;
     isRunning: boolean;
     webhookUrl: string;
     telegramBotToken: string;

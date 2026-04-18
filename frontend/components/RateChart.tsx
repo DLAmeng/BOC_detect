@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { RateData } from '../types.ts';
 import { fetchRateHistory } from '../utils/api.ts';
+import { calculateThresholds } from '../utils/rateStats.ts';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 
 type TimeRange = '24h' | '7d' | '14d' | '30d' | '3m' | '6m' | '1y';
 
 interface Props {
     history: RateData[];
-    targetRate: number;
     currency: string;
+    windowDays?: number;
 }
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -34,7 +35,7 @@ const RANGES: { value: TimeRange; label: string }[] = [
     { value: '1y', label: '1Y' },
 ];
 
-export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) => {
+export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 }) => {
     const [timeRange, setTimeRange] = useState<TimeRange>('7d');
     const [persistedHistory, setPersistedHistory] = useState<RateData[]>([]);
     const [historyError, setHistoryError] = useState<string | null>(null);
@@ -178,10 +179,17 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
         };
     });
 
+    const thresholds = calculateThresholds(mergedHistory, currency, windowDays);
+
     const rates = displayData.flatMap((item) => [item.calculatedRate, item.bocRate].filter((v): v is number => v !== undefined));
-    const padding = Math.max(targetRate * 0.02, 0.01);
-    const minRate = Math.min(...rates, targetRate) - padding;
-    const maxRate = Math.max(...rates, targetRate) + padding;
+    const extraPoints = [];
+    if (thresholds) {
+        extraPoints.push(thresholds.bestZoneUpper, thresholds.goodZoneUpper);
+    }
+    const avgRate = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : 1;
+    const padding = Math.max(avgRate * 0.02, 0.01);
+    const minRate = Math.min(...rates, ...extraPoints) - padding;
+    const maxRate = Math.max(...rates, ...extraPoints) + padding;
 
     return (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 md:p-6 h-[350px] md:h-[420px] flex flex-col">
@@ -210,7 +218,7 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
 
             <div className="flex-grow w-full min-h-0">
                 <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
+                    <LineChart data={chartData} margin={{ top: 5, right: 5, left: -25, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
                         <XAxis dataKey="time" stroke="#6b7280" fontSize={10} tickMargin={8} minTickGap={20} />
                         <YAxis domain={[minRate, maxRate]} stroke="#6b7280" fontSize={10} tickFormatter={(value) => value.toFixed(4)} />
@@ -235,12 +243,20 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
                                 name === 'rate' ? 'Yahoo 汇率' : '中行 汇率'
                             ]}
                         />
-                        <ReferenceLine
-                            y={targetRate}
-                            stroke="#22c55e"
-                            strokeDasharray="3 3"
-                            label={{ position: 'insideTopLeft', value: '目标价', fill: '#22c55e', fontSize: 10, offset: 5 }}
-                        />
+                        {thresholds && (
+                            <>
+                                <ReferenceLine
+                                    y={thresholds.bestZoneUpper}
+                                    stroke="#ef4444"
+                                    strokeDasharray="4 4"
+                                />
+                                <ReferenceLine
+                                    y={thresholds.goodZoneUpper}
+                                    stroke="#eab308"
+                                    strokeDasharray="4 4"
+                                />
+                            </>
+                        )}
                         <Line
                             name="rate"
                             type="monotone"
@@ -264,6 +280,36 @@ export const RateChart: React.FC<Props> = ({ history, targetRate, currency }) =>
                         />
                     </LineChart>
                 </ResponsiveContainer>
+            </div>
+
+            {/* Explanatory Legend below the chart area */}
+            <div className="mt-2 md:mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 px-1 border-t border-gray-800/50 pt-3 md:pt-4">
+                <div className="flex items-center gap-2">
+                    <div className="w-4 h-0.5 bg-[#3b82f6] rounded-full"></div>
+                    <span className="text-[10px] md:text-xs text-gray-500 font-medium">Yahoo 汇率 (实线)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                    <div className="w-4 h-0.5 border-t-2 border-dashed border-[#f59e0b]"></div>
+                    <span className="text-[10px] md:text-xs text-gray-500 font-medium">中行参考 (橙虚)</span>
+                </div>
+                {thresholds && (
+                    <>
+                        <div className="flex items-center gap-2">
+                            <div className="w-4 h-0.5 border-t-2 border-dashed border-[#ef4444]"></div>
+                            <div className="flex flex-col">
+                                <span className="text-[10px] md:text-xs text-[#ef4444] font-bold">强烈换汇区 (Best)</span>
+                                <span className="text-[9px] text-gray-600 font-mono">≤{thresholds.bestZoneUpper.toFixed(4)}</span>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <div className="w-4 h-0.5 border-t-2 border-dashed border-[#eab308]"></div>
+                            <div className="flex flex-col">
+                                <span className="text-[10px] md:text-xs text-[#eab308] font-bold">适合换汇区 (Good)</span>
+                                <span className="text-[9px] text-gray-600 font-mono">≤{thresholds.goodZoneUpper.toFixed(4)}</span>
+                            </div>
+                        </div>
+                    </>
+                )}
             </div>
         </div>
     );

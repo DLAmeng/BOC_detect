@@ -13,14 +13,24 @@ const app = express();
 
 const DEFAULT_MONITOR_CONFIG = {
   monitoredCurrencies: [
-    { currency: 'AUD', targetRate: 4.66 },
-    { currency: 'USD', targetRate: 7.15 }
+    { currency: 'AUD' },
+    { currency: 'USD' }
   ],
   checkIntervalSeconds: 10,
+  calculationWindowDays: 14,
   isRunning: true,
   webhookUrl: '',
   telegramBotToken: '',
   telegramChatId: ''
+};
+
+const MIN_RANGE_MAP = {
+  AUD: 0.04,
+  USD: 0.05,
+  JPY: 0.30,
+  EUR: 0.06,
+  GBP: 0.06,
+  HKD: 0.01,
 };
 
 const PORT = Number(process.env.PORT || process.env.API_BACKEND_PORT || 3001);
@@ -89,6 +99,9 @@ const loadMonitorConfig = async () => {
     if (typeof config.checkIntervalSeconds !== 'number') {
       config.checkIntervalSeconds = DEFAULT_MONITOR_CONFIG.checkIntervalSeconds;
     }
+    if (typeof config.calculationWindowDays !== 'number') {
+      config.calculationWindowDays = DEFAULT_MONITOR_CONFIG.calculationWindowDays;
+    }
     if (!Array.isArray(config.monitoredCurrencies)) {
       config.monitoredCurrencies = DEFAULT_MONITOR_CONFIG.monitoredCurrencies;
     }
@@ -127,6 +140,12 @@ const saveMonitorConfig = async (newConfig) => {
     configToSave.checkIntervalSeconds = Number.isFinite(parsedInterval) 
       ? Math.max(10, parsedInterval) // 最小值强制为 10 秒
       : DEFAULT_MONITOR_CONFIG.checkIntervalSeconds;
+
+    // 1.1 calculationWindowDays
+    const parsedWindow = Number.parseInt(newConfig.calculationWindowDays, 10);
+    configToSave.calculationWindowDays = Number.isFinite(parsedWindow)
+      ? Math.max(1, Math.min(365, parsedWindow))
+      : DEFAULT_MONITOR_CONFIG.calculationWindowDays;
       
     // 2. isRunning
     configToSave.isRunning = newConfig.isRunning !== undefined 
@@ -149,10 +168,7 @@ const saveMonitorConfig = async (newConfig) => {
           if (CURRENCY_MAP[code] && !seen.has(code)) {
             seen.add(code);
             validCurrencies.push({
-              currency: code,
-              targetRate: typeof item.targetRate === 'number' && Number.isFinite(item.targetRate) 
-                ? item.targetRate 
-                : 0
+              currency: code
             });
           }
         }
@@ -546,35 +562,97 @@ app.get('/api/rates', async (req, res) => {
 // Background Worker System
 let currentTimerId = null;
 
-const evaluateTargetAlerts = async (rateRecord, currencyConfig, botToken, chatId) => {
-  if (!botToken || !chatId || !currencyConfig.targetRate || rateRecord.calculatedRate > currencyConfig.targetRate) {
-    return;
+const calculateDynamicThresholds = async (currencyCode, windowDays = 14) => {
+  const store = await loadHistoryStore();
+  const history = store[currencyCode] || [];
+  if (history.length === 0) return null;
+
+  const now = Date.now();
+  const windowMs = windowDays * 24 * 60 * 60 * 1000;
+  
+  // Filter by time window
+  const recentRates = history
+    .filter(r => r.fetchTimestampMs && r.fetchTimestampMs > (now - windowMs))
+    .map(r => r.calculatedRate);
+    
+  if (recentRates.length < 5) return null; // Too few data points for reliable calculation
+
+  recentRates.sort((a, b) => a - b);
+  
+  const p10 = recentRates[Math.floor(recentRates.length * 0.10)];
+  const p90 = recentRates[Math.floor(recentRates.length * 0.90)];
+  
+  let range = p90 - p10;
+  const minRange = MIN_RANGE_MAP[currencyCode] || 0.05;
+  if (range < minRange) range = minRange;
+  
+  const bestZoneUpper = p10 + range * 0.12;
+  const goodZoneUpper = p10 + range * 0.25;
+  const buffer = range * 0.05;
+  
+  return {
+    p10,
+    p90,
+    range,
+    bestZoneUpper,
+    goodZoneUpper,
+    buffer
+  };
+};
+
+const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
+  if (!botToken || !chatId) return;
+
+  const currencyCode = rateRecord.currency;
+  const thresholds = await calculateDynamicThresholds(currencyCode, config.calculationWindowDays);
+  if (!thresholds) return;
+
+  const { bestZoneUpper, goodZoneUpper, buffer } = thresholds;
+  const currentRate = rateRecord.calculatedRate;
+  const leaveThreshold = goodZoneUpper + buffer;
+
+  // Initialize state flags
+  global.alertStateFlags = global.alertStateFlags || {};
+  if (!global.alertStateFlags[currencyCode]) {
+    global.alertStateFlags[currencyCode] = {
+      hasNotifiedGood: false,
+      hasNotifiedBest: false
+    };
   }
-  
-  // Store the last alerted rates in memory to avoid duplicate alerts in same session
-  // In a more robust system, this should be stored in file or DB.
-  global.lastAlertedRates = global.lastAlertedRates || {};
-  const previousAlertRate = global.lastAlertedRates[currencyConfig.currency];
-  
-  if (previousAlertRate === rateRecord.calculatedRate) {
-    return; // Already alerted for this exact rate
+
+  const state = global.alertStateFlags[currencyCode];
+  const messages = [];
+
+  if (currentRate <= bestZoneUpper) {
+    if (!state.hasNotifiedBest) {
+      state.hasNotifiedBest = true;
+      state.hasNotifiedGood = true; // Entering best implies entering good
+      messages.push(`📉 [${rateRecord.currencyName}] 已进入强烈换汇区，当前汇率 ¥${currentRate}，适合优先换汇`);
+    }
+  } else if (currentRate <= goodZoneUpper) {
+    if (!state.hasNotifiedGood) {
+      state.hasNotifiedGood = true;
+      messages.push(`✅ [${rateRecord.currencyName}] 进入适合换汇区，当前汇率 ¥${currentRate}，可考虑分批换汇`);
+    }
+  } else if (currentRate > leaveThreshold) {
+    if (state.hasNotifiedGood || state.hasNotifiedBest) {
+      state.hasNotifiedGood = false;
+      state.hasNotifiedBest = false;
+      messages.push(`📈 [${rateRecord.currencyName}] 已离开适合换汇区，当前汇率 ¥${currentRate}，已高于上限 ¥${goodZoneUpper.toFixed(4)}`);
+    }
   }
-  
-  global.lastAlertedRates[currencyConfig.currency] = rateRecord.calculatedRate;
-  
-  const sourceName = rateRecord.source === 'Yahoo + BOC' ? 'Yahoo Finance' : rateRecord.source;
-  const message = `🔔 [${rateRecord.currencyName} 到价提醒]\n\n当前实时汇率：¥${rateRecord.calculatedRate}\n目标阈值：¥${currencyConfig.targetRate.toFixed(4)}\n\n更新时间：${rateRecord.pubTime}\n来源：${sourceName}`;
-  
-  console.log(`[BOC Backend Background] Target hit for ${rateRecord.currency}, sending alert...`);
-  
-  try {
-    await sendTelegramMessages({
-      botToken,
-      chatId,
-      messages: [message],
-    });
-  } catch (err) {
-    console.error(`[BOC Backend Background] Failed to send telegram alert for ${rateRecord.currency}:`, err.message);
+
+  if (messages.length > 0) {
+    console.log(`[BOC Backend Background] Alert triggered for ${currencyCode}: ${messages[0].split('\n')[0]}`);
+    try {
+      await sendTelegramMessages({
+        botToken,
+        chatId,
+        messages,
+      });
+    } catch (err) {
+      console.error(`[BOC Backend Background] Failed to send telegram alert for ${currencyCode}:`, err.message);
+    }
   }
 };
 

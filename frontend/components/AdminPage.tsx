@@ -22,8 +22,6 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
     const [isDirty, setIsDirty] = useState(false);
     const [saveMessage, setSaveMessage] = useState('');
     const [validationMessage, setValidationMessage] = useState('');
-    const [suggestedRates, setSuggestedRates] = useState<Record<string, number | null>>({});
-    const [loadingSuggestions, setLoadingSuggestions] = useState<Record<string, boolean>>({});
     const [testSending, setTestSending] = useState(false);
     const [testResult, setTestResult] = useState<{ type: 'success' | 'warn' | 'error'; text: string } | null>(null);
 
@@ -33,32 +31,6 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
         setValidationMessage('');
     }, [config]);
 
-    const refreshSuggestion = async (currency: string, silent = false) => {
-        if (!silent) setLoadingSuggestions((prev) => ({ ...prev, [currency]: true }));
-        try {
-            const history = await fetchRateHistory(currency, 2000);
-            setSuggestedRates((prev) => ({ ...prev, [currency]: suggestTargetRate(history) }));
-        } catch {
-            setSuggestedRates((prev) => ({ ...prev, [currency]: null }));
-        } finally {
-            if (!silent) setLoadingSuggestions((prev) => ({ ...prev, [currency]: false }));
-        }
-    };
-
-    useEffect(() => {
-        localConfig.monitoredCurrencies.forEach((c) => {
-            if (suggestedRates[c.currency] === undefined) {
-                refreshSuggestion(c.currency);
-            }
-        });
-    }, [localConfig.monitoredCurrencies]);
-
-    useEffect(() => {
-        const id = window.setInterval(() => {
-            localConfig.monitoredCurrencies.forEach((c) => refreshSuggestion(c.currency, true));
-        }, 5 * 60 * 1000);
-        return () => window.clearInterval(id);
-    }, [localConfig.monitoredCurrencies]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const { name, value, type } = e.target;
@@ -87,29 +59,11 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
             };
         });
 
-        setSuggestedRates((prev) => {
-            const next = { ...prev };
-            delete next[currencyCode];
-            return next;
-        });
-
         setIsDirty(true);
         setSaveMessage('');
         setValidationMessage('');
     };
 
-    const handleTargetRateChange = (currencyCode: string, targetRate: number) => {
-        setLocalConfig((prev) => ({
-            ...prev,
-            monitoredCurrencies: prev.monitoredCurrencies.map((item) =>
-                item.currency === currencyCode ? { ...item, targetRate } : item
-            )
-        }));
-
-        setIsDirty(true);
-        setSaveMessage('');
-        setValidationMessage('');
-    };
 
     const handleTestTelegram = async () => {
         setTestSending(true);
@@ -191,7 +145,6 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                                         <div className="flex items-center justify-between gap-3">
                                             <div>
                                                 <p className="text-sm font-medium">{currency.name}</p>
-                                                <p className="text-[10px] text-gray-500 mt-1">默认目标价 ¥{currency.defaultTarget.toFixed(4)}</p>
                                             </div>
                                             {selected ? (
                                                 <CheckSquare className="w-5 h-5 text-blue-400 flex-shrink-0" />
@@ -206,66 +159,33 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                         <p className="text-[10px] md:text-xs text-gray-500 mt-2">建议只勾选你真正需要的币种，减少对源站的请求压力。</p>
                     </div>
 
-                    <div>
-                        <label className="block text-xs md:text-sm font-medium text-gray-400 mb-3">每个币种的目标汇率</label>
-                        {localConfig.monitoredCurrencies.length === 0 ? (
-                            <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-4 text-sm text-red-300">
-                                请先选择至少一个监控币种。
-                            </div>
-                        ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {localConfig.monitoredCurrencies.map((currencyConfig) => (
-                                    <div key={currencyConfig.currency} className="bg-gray-950 border border-gray-800 rounded-lg p-4">
-                                        <label className="block text-xs md:text-sm font-medium text-gray-300 mb-2">
-                                            目标汇率 (1 {currencyConfig.currency} = 人民币)
-                                        </label>
-                                        <div className="relative">
-                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">¥</span>
-                                            <input
-                                                type="number"
-                                                step="0.0001"
-                                                value={currencyConfig.targetRate}
-                                                onChange={(event) => handleTargetRateChange(currencyConfig.currency, Number(event.target.value))}
-                                                className="w-full bg-gray-900 border border-gray-700 rounded-lg py-2.5 pl-8 pr-3 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
-                                            />
-                                        </div>
-                                        <p className="text-[10px] md:text-xs text-gray-500 mt-2">当 {currencyConfig.currency} 的真实汇率 ≤ 此值时触发提醒。</p>
-                                        {loadingSuggestions[currencyConfig.currency] && (
-                                            <p className="text-[10px] md:text-xs text-gray-600 mt-1.5">正在计算建议目标价…</p>
-                                        )}
-                                        {!loadingSuggestions[currencyConfig.currency] && suggestedRates[currencyConfig.currency] != null && (
-                                            <div className="flex items-center gap-2 mt-2 flex-wrap">
-                                                <Lightbulb className="w-3 h-3 text-yellow-400 flex-shrink-0" />
-                                                <span className="text-[10px] md:text-xs text-yellow-300">
-                                                    近 14 天 20% 低位：¥{suggestedRates[currencyConfig.currency]!.toFixed(4)}
-                                                </span>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleTargetRateChange(currencyConfig.currency, suggestedRates[currencyConfig.currency]!)}
-                                                    className="text-[10px] md:text-xs px-2 py-0.5 rounded bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 border border-yellow-500/20 transition-colors"
-                                                >
-                                                    应用
-                                                </button>
-                                                <span className="text-[10px] text-gray-600">每 5 分钟自动更新</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
 
-                    <div>
-                        <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">检查间隔 (秒)</label>
-                        <input
-                            type="number"
-                            name="checkIntervalSeconds"
-                            min="5"
-                            value={localConfig.checkIntervalSeconds}
-                            onChange={handleChange}
-                            className="w-full md:w-1/2 bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
-                        />
-                        <p className="text-[10px] md:text-xs text-gray-500 mt-1.5 md:mt-2">同一轮询周期内会按选中币种逐个抓取，建议设置为 10 秒或更长。</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">检查间隔 (秒)</label>
+                            <input
+                                type="number"
+                                name="checkIntervalSeconds"
+                                min="5"
+                                value={localConfig.checkIntervalSeconds}
+                                onChange={handleChange}
+                                className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+                            />
+                            <p className="text-[10px] md:text-xs text-gray-500 mt-1.5 md:mt-2">建议设置为 10 秒或更长。</p>
+                        </div>
+                        <div>
+                            <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">计算窗口天数</label>
+                            <input
+                                type="number"
+                                name="calculationWindowDays"
+                                min="1"
+                                max="365"
+                                value={localConfig.calculationWindowDays}
+                                onChange={handleChange}
+                                className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+                            />
+                            <p className="text-[10px] md:text-xs text-gray-500 mt-1.5 md:mt-2">用于动态百分位算法计算 Best/Good 区间的历史窗口（默认 14 天）。</p>
+                        </div>
                     </div>
                 </div>
             </div>

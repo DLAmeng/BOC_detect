@@ -3,6 +3,7 @@ import { SystemState, SystemConfig, RateData, AlertLog, MonitoredCurrencyConfig 
 import { DEFAULT_MONITORED_CURRENCIES } from './constants/currencies.ts';
 import { fetchRealRate, fetchRateHistory, sendTelegramNotifications, fetchMonitorConfig, saveMonitorConfig } from './utils/api.ts';
 import { processRateData, createErrorAlert, createInfoAlert } from './utils/alertLogic.ts';
+import { calculateThresholds } from './utils/rateStats.ts';
 import { DashboardCard } from './components/DashboardCard.tsx';
 import { RateChart } from './components/RateChart.tsx';
 import { AdminPage } from './components/AdminPage.tsx';
@@ -21,6 +22,7 @@ import { format } from 'date-fns';
 const INITIAL_CONFIG: SystemConfig = {
     monitoredCurrencies: DEFAULT_MONITORED_CURRENCIES,
     checkIntervalSeconds: 10,
+    calculationWindowDays: 14,
     isRunning: true,
     webhookUrl: '',
     telegramBotToken: '',
@@ -222,12 +224,14 @@ const App: React.FC = () => {
                 try {
                     const newRateData: RateData = await fetchRealRate(currency);
                     const currentRate = currentState.currentRates[currency] ?? null;
+                    const history = currentState.historyByCurrency[currency] ?? [];
+                    const thresholds = calculateThresholds(history, currency, currentState.config.calculationWindowDays);
 
-                    const { alerts, updatedLastAlertedRate } = processRateData(
+                    const { alerts } = processRateData(
                         newRateData,
                         currentRate,
                         currencyConfig,
-                        currentState.lastAlertedRates[currency] ?? null
+                        thresholds
                     );
 
                     const hasNewPoint =
@@ -240,7 +244,7 @@ const App: React.FC = () => {
                         ? [...(currentState.historyByCurrency[currency] ?? []), newRateData].slice(-MAX_HISTORY_POINTS)
                         : currentState.historyByCurrency[currency] ?? [];
                     nextLastErrors[currency] = null;
-                    nextLastAlertedRates[currency] = updatedLastAlertedRate;
+                    nextLastAlertedRates[currency] = null; // No longer used for target rate
 
                     cycleAlerts.push(...alerts);
                     notificationMessages.push(
@@ -465,7 +469,6 @@ const App: React.FC = () => {
                                             key={currencyConfig.currency}
                                             currentRate={state.currentRates[currencyConfig.currency] ?? null}
                                             previousRate={state.previousRates[currencyConfig.currency] ?? null}
-                                            targetRate={currencyConfig.targetRate}
                                             currency={currencyConfig.currency}
                                             isActive={activeChartConfig?.currency === currencyConfig.currency}
                                             onSelect={() => setActiveChartCurrency(currencyConfig.currency)}
@@ -476,8 +479,8 @@ const App: React.FC = () => {
                                 {activeChartConfig && (
                                     <RateChart
                                         history={state.historyByCurrency[activeChartConfig.currency] ?? []}
-                                        targetRate={activeChartConfig.targetRate}
                                         currency={activeChartConfig.currency}
+                                        windowDays={state.config.calculationWindowDays}
                                     />
                                 )}
                             </div>
