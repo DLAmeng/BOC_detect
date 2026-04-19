@@ -172,7 +172,7 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
         }
 
         return {
-            time: useDayLabel ? item.fetchTime.split(' ')[0].slice(5) : item.fetchTime.split(' ')[1],
+            fetchTimestampMs: item.fetchTimestampMs,
             fullTime: item.fetchTime,
             rate: yahooRate,
             bocRate: bocRate
@@ -226,10 +226,43 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
 
             <div className="flex-grow w-full min-h-0">
                 <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData} margin={{ top: 5, right: 5, left: -25, bottom: 5 }}>
+                    <LineChart data={chartData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
-                        <XAxis dataKey="time" stroke="#6b7280" fontSize={10} tickMargin={8} minTickGap={20} />
-                        <YAxis domain={[minRate, maxRate]} stroke="#6b7280" fontSize={10} tickFormatter={(value) => value.toFixed(4)} />
+                        <XAxis 
+                            dataKey="fetchTimestampMs" 
+                            type="number"
+                            domain={['dataMin', 'dataMax']}
+                            stroke="#6b7280" 
+                            fontSize={10} 
+                            tickMargin={8} 
+                            minTickGap={30}
+                            tickFormatter={(unixTime) => {
+                                const date = new Date(unixTime);
+                                const now = new Date();
+                                const isCurrentYear = date.getFullYear() === now.getFullYear();
+                                const isToday = date.getDate() === now.getDate() && date.getMonth() === now.getMonth() && isCurrentYear;
+                        
+                                const month = (date.getMonth() + 1).toString().padStart(2, '0');
+                                const day = date.getDate().toString().padStart(2, '0');
+                                const hours = date.getHours().toString().padStart(2, '0');
+                                const minutes = date.getMinutes().toString().padStart(2, '0');
+
+                                if (timeRange === '24h') {
+                                    if (isToday) {
+                                        return `${hours}:${minutes}`;
+                                    } else {
+                                        return `${month}-${day} ${hours}:${minutes}`;
+                                    }
+                                } else {
+                                    if (isCurrentYear) {
+                                        return `${month}-${day}`;
+                                    } else {
+                                        return `${date.getFullYear()}-${month}-${day}`;
+                                    }
+                                }
+                            }}
+                        />
+                        <YAxis width={50} domain={[minRate, maxRate]} stroke="#6b7280" fontSize={10} tickFormatter={(value) => value.toFixed(4)} />
                         <Tooltip
                             contentStyle={{
                                 backgroundColor: '#1f2937',
@@ -270,6 +303,7 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
                             type="monotone"
                             dataKey="rate"
                             stroke="#3b82f6"
+                            isAnimationActive={false}
                             strokeWidth={2}
                             dot={false}
                             activeDot={{ r: 4, fill: '#3b82f6', stroke: '#1e3a8a', strokeWidth: 2 }}
@@ -285,6 +319,7 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
                             dot={false}
                             activeDot={{ r: 3, fill: '#f59e0b', stroke: '#78350f', strokeWidth: 2 }}
                             connectNulls
+                            isAnimationActive={false}
                         />
                     </LineChart>
                 </ResponsiveContainer>

@@ -33,7 +33,8 @@ const normalizeRateData = (data: any): RateData => {
         bocRawRate: data.bocRawRate,
         pubTime: data.pubTime,
         fetchTime: data.fetchTime || formatDateTime(fetchTimestampMs),
-        fetchTimestampMs
+        fetchTimestampMs,
+        source: data.source
     };
 };
 
