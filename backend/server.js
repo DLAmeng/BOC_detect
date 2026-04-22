@@ -571,16 +571,23 @@ const calculateDynamicThresholds = async (currencyCode, windowDays = 14) => {
   const windowMs = windowDays * 24 * 60 * 60 * 1000;
   
   // Filter by time window
-  const recentRates = history
-    .filter(r => r.fetchTimestampMs && r.fetchTimestampMs > (now - windowMs))
-    .map(r => r.calculatedRate);
-    
-  if (recentRates.length < 5) return null; // Too few data points for reliable calculation
-
-  recentRates.sort((a, b) => a - b);
+  let pool = history.filter(r => r.fetchTimestampMs && (now - r.fetchTimestampMs) <= windowMs);
   
-  const p10 = recentRates[Math.floor(recentRates.length * 0.10)];
-  const p90 = recentRates[Math.floor(recentRates.length * 0.90)];
+  let usedFallback = false;
+  if (pool.length < 5) {
+    pool = history;
+    usedFallback = true;
+  }
+
+  const rates = pool
+    .map(r => r.calculatedRate)
+    .filter(r => r > 0)
+    .sort((a, b) => a - b);
+    
+  if (rates.length < 5) return null; // Too few data points for reliable calculation
+  
+  const p10 = rates[Math.floor(rates.length * 0.10)];
+  const p90 = rates[Math.floor(rates.length * 0.90)];
   
   let range = p90 - p10;
   const minRange = MIN_RANGE_MAP[currencyCode] || 0.05;
@@ -590,6 +597,8 @@ const calculateDynamicThresholds = async (currencyCode, windowDays = 14) => {
   const goodZoneUpper = p10 + range * 0.25;
   const buffer = range * 0.05;
   
+  console.log(`[Debug Threshold] ${currencyCode} | Window: ${windowDays}d | Fallback: ${usedFallback} | Samples: ${rates.length} | p10: ${p10}, p90: ${p90}, range: ${range.toFixed(4)}, bestZone: ${bestZoneUpper.toFixed(4)}, goodZone: ${goodZoneUpper.toFixed(4)}`);
+
   return {
     p10,
     p90,
@@ -609,6 +618,7 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
 
   const { bestZoneUpper, goodZoneUpper, buffer } = thresholds;
   const currentRate = rateRecord.calculatedRate;
+  const bocRate = rateRecord.bocRate;
   const leaveThreshold = goodZoneUpper + buffer;
 
   // Initialize state flags
@@ -616,29 +626,72 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
   if (!global.alertStateFlags[currencyCode]) {
     global.alertStateFlags[currencyCode] = {
       hasNotifiedGood: false,
-      hasNotifiedBest: false
+      hasNotifiedBest: false,
+      lastNotifiedRate: null
     };
   }
 
   const state = global.alertStateFlags[currencyCode];
   const messages = [];
 
+  const buildMessage = (title, advice, showComparison = false) => {
+    let msg = `${title}\n`;
+    if (bocRate) {
+      msg += `BOC 卖出价：¥${bocRate.toFixed(4)}\n`;
+    }
+    msg += `当前参考价：¥${currentRate.toFixed(4)}\n`;
+    msg += `适合区上限：¥${goodZoneUpper.toFixed(4)}\n`;
+    msg += `强烈区上限：¥${bestZoneUpper.toFixed(4)}\n`;
+    
+    if (showComparison && state.lastNotifiedRate && currentRate < state.lastNotifiedRate) {
+      msg += `较上次通知更低：¥${state.lastNotifiedRate.toFixed(4)} → ¥${currentRate.toFixed(4)}\n`;
+    }
+    
+    msg += `\n${advice}`;
+    return msg;
+  };
+
   if (currentRate <= bestZoneUpper) {
     if (!state.hasNotifiedBest) {
+      // First time entering best zone
       state.hasNotifiedBest = true;
-      state.hasNotifiedGood = true; // Entering best implies entering good
-      messages.push(`📉 [${rateRecord.currencyName}] 已进入强烈换汇区，当前汇率 ¥${currentRate}，适合优先换汇`);
+      state.hasNotifiedGood = true;
+      
+      messages.push(buildMessage(`📉 [${rateRecord.currencyName}] 进入强烈换汇区`, '适合优先换汇', false));
+      state.lastNotifiedRate = currentRate;
+    } else if (state.lastNotifiedRate && currentRate < state.lastNotifiedRate) {
+      // Still in best zone, but lower than last notified
+      messages.push(buildMessage(`📉 [${rateRecord.currencyName}] 强烈换汇区内发现更低汇率`, '适合优先换汇', true));
+      state.lastNotifiedRate = currentRate;
     }
   } else if (currentRate <= goodZoneUpper) {
     if (!state.hasNotifiedGood) {
+      // First time entering good zone
       state.hasNotifiedGood = true;
-      messages.push(`✅ [${rateRecord.currencyName}] 进入适合换汇区，当前汇率 ¥${currentRate}，可考虑分批换汇`);
+      
+      messages.push(buildMessage(`✅ [${rateRecord.currencyName}] 进入适合换汇区`, '可考虑分批换汇', false));
+      state.lastNotifiedRate = currentRate;
+    } else if (state.lastNotifiedRate && currentRate < state.lastNotifiedRate) {
+      // Still in good zone, but lower than last notified
+      messages.push(buildMessage(`✅ [${rateRecord.currencyName}] 适合换汇区内发现更低汇率`, '可考虑分批换汇', true));
+      state.lastNotifiedRate = currentRate;
     }
   } else if (currentRate > leaveThreshold) {
     if (state.hasNotifiedGood || state.hasNotifiedBest) {
+      // Leaving zones
       state.hasNotifiedGood = false;
       state.hasNotifiedBest = false;
-      messages.push(`📈 [${rateRecord.currencyName}] 已离开适合换汇区，当前汇率 ¥${currentRate}，已高于上限 ¥${goodZoneUpper.toFixed(4)}`);
+      state.lastNotifiedRate = null;
+      
+      let msg = `📈 [${rateRecord.currencyName}] 已离开适合换汇区\n`;
+      if (bocRate) {
+        msg += `BOC 卖出价：¥${bocRate.toFixed(4)}\n`;
+      }
+      msg += `当前参考价：¥${currentRate.toFixed(4)}\n`;
+      msg += `适合区上限：¥${goodZoneUpper.toFixed(4)}\n`;
+      msg += `\n已高于上限，建议观望`;
+      
+      messages.push(msg);
     }
   }
 
@@ -671,7 +724,8 @@ const runBackgroundCheck = async () => {
       try {
         const rateRecord = await fetchRateRecord(currencyConfig.currency);
         await recordRateHistory(rateRecord);
-        await evaluateTargetAlerts(rateRecord, currencyConfig, botToken, chatId);
+        // evaluateTargetAlerts expects the full system config, not currencyConfig
+        await evaluateTargetAlerts(rateRecord, config, botToken, chatId);
       } catch (error) {
         console.error(`[BOC Backend Background] Error checking ${currencyConfig.currency}:`, error.message);
       }

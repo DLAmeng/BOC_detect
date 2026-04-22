@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { SystemConfig } from '../types.ts';
 import { AVAILABLE_CURRENCIES, buildCurrencyConfig } from '../constants/currencies.ts';
-import { fetchRateHistory, sendTelegramNotifications } from '../utils/api.ts';
-import { suggestTargetRate } from '../utils/rateStats.ts';
-import { Save, CheckSquare, Square, Server, Bell, Target, Database, Lightbulb, Send } from 'lucide-react';
+import { sendTelegramNotifications } from '../utils/api.ts';
+import { Save, CheckSquare, Square, Bell, Target, Send } from 'lucide-react';
 
 interface Props {
     config: SystemConfig;
