@@ -616,10 +616,11 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
   const thresholds = await calculateDynamicThresholds(currencyCode, config.calculationWindowDays);
   if (!thresholds) return;
 
-  const { bestZoneUpper, goodZoneUpper, buffer } = thresholds;
+  const { bestZoneUpper, goodZoneUpper, buffer, range } = thresholds;
   const currentRate = rateRecord.calculatedRate;
   const bocRate = rateRecord.bocRate;
   const leaveThreshold = goodZoneUpper + buffer;
+  const minDropToNotify = range * 0.02; // 至少跌幅达到波动范围的 2% 才重复通知，防抖
 
   // Initialize state flags
   global.alertStateFlags = global.alertStateFlags || {};
@@ -659,8 +660,8 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
       
       messages.push(buildMessage(`📉 [${rateRecord.currencyName}] 进入强烈换汇区`, '适合优先换汇', false));
       state.lastNotifiedRate = currentRate;
-    } else if (state.lastNotifiedRate && currentRate < state.lastNotifiedRate) {
-      // Still in best zone, but lower than last notified
+    } else if (state.lastNotifiedRate && (state.lastNotifiedRate - currentRate) >= minDropToNotify) {
+      // Still in best zone, and significantly lower than last notified
       messages.push(buildMessage(`📉 [${rateRecord.currencyName}] 强烈换汇区内发现更低汇率`, '适合优先换汇', true));
       state.lastNotifiedRate = currentRate;
     }
@@ -671,8 +672,8 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
       
       messages.push(buildMessage(`✅ [${rateRecord.currencyName}] 进入适合换汇区`, '可考虑分批换汇', false));
       state.lastNotifiedRate = currentRate;
-    } else if (state.lastNotifiedRate && currentRate < state.lastNotifiedRate) {
-      // Still in good zone, but lower than last notified
+    } else if (state.lastNotifiedRate && (state.lastNotifiedRate - currentRate) >= minDropToNotify) {
+      // Still in good zone, and significantly lower than last notified
       messages.push(buildMessage(`✅ [${rateRecord.currencyName}] 适合换汇区内发现更低汇率`, '可考虑分批换汇', true));
       state.lastNotifiedRate = currentRate;
     }
