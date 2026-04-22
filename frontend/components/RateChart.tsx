@@ -94,6 +94,10 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
     // But for a better UX, we only render the Chart if we have at least 2 points.
     const hasEnoughData = displayData.length >= 2;
 
+    // 如果没有展示数据，但总的有历史数据，可能是时间范围选得太窄了 (24h)
+    // 这种情况下不应该显示白屏或加载中，而应该显示带警告的标题头
+    const shouldShowEmptyState = !hasEnoughData && mergedHistory.length > 0;
+
     if (isLoadingHistory && mergedHistory.length === 0) {
         return (
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 md:p-6 h-[300px] md:h-[400px] flex items-center justify-center text-gray-500">
@@ -251,7 +255,7 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
                 </div>
             )}
 
-            <div className="flex-grow w-full min-h-[250px] md:min-h-[300px]">
+            <div className="w-full h-[260px] md:h-[320px] lg:h-[360px] min-w-0">
                 <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />

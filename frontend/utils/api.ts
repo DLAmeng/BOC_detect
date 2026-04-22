@@ -11,7 +11,12 @@ const formatDateTime = (timestampMs: number) => {
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 };
 
-const getApiBaseUrl = () => (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
+const getApiBaseUrl = () => {
+    // 采用更具兼容性的方式获取环境变量，避免类型报错导致阻断
+    const env = (import.meta as any).env;
+    const baseUrl = (env && env.VITE_API_BASE_URL) || '/api';
+    return baseUrl.replace(/\/$/, '');
+};
 
 const normalizeRateData = (data: any): RateData => {
     const fallbackTimestamp = Date.now();

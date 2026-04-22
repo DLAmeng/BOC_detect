@@ -5,6 +5,7 @@ import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import { refreshYahooHistory } from './lib/yahooHistory.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,6 +41,8 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const LEGACY_HISTORY_FILE = path.join(DATA_DIR, 'rates-history.json');
 const MAX_HISTORY_PER_CURRENCY = Number(process.env.MAX_HISTORY_PER_CURRENCY || 100000);
 const DEFAULT_HISTORY_LIMIT = Number(process.env.DEFAULT_HISTORY_LIMIT || 2000);
+const AUTO_REFRESH_YAHOO_HISTORY_ON_START =
+  `${process.env.AUTO_REFRESH_YAHOO_HISTORY_ON_START || 'true'}`.toLowerCase() !== 'false';
 
 const currencyFilePath = (code) => path.join(DATA_DIR, `rates-${code}.ndjson`);
 const MONITOR_CONFIG_FILE = path.join(DATA_DIR, 'monitor-config.json');
@@ -84,6 +87,7 @@ const REQUEST_HEADERS = {
 
 let historyStore = null;
 let historyLoadPromise = null;
+let startupHistoryRefreshPromise = null;
 const writeQueues = new Map();
 
 const loadMonitorConfig = async () => {
@@ -287,6 +291,13 @@ const loadHistoryStore = async () => {
   return historyLoadPromise;
 };
 
+const reloadHistoryStore = async () => {
+  console.log('[BOC Backend] Reloading history store from disk...');
+  historyStore = null;
+  historyLoadPromise = null;
+  await loadHistoryStore();
+};
+
 const findCurrencyRow = ($, currencyName) => {
   let matchedRow = null;
 
@@ -487,10 +498,7 @@ app.get('/api/health', async (_req, res) => {
 
 app.post('/api/history/reload', async (req, res) => {
   try {
-    console.log('[BOC Backend] Reloading history store from disk...');
-    historyStore = null;
-    historyLoadPromise = null;
-    await loadHistoryStore();
+    await reloadHistoryStore();
     return res.json({ success: true, message: '历史数据缓存已刷新' });
   } catch (error) {
     console.error('[BOC Backend] Failed to reload history store:', error);
@@ -783,6 +791,43 @@ const restartBackgroundWorker = async () => {
   }
 };
 
+const refreshYahooHistoryOnStartup = async () => {
+  if (!AUTO_REFRESH_YAHOO_HISTORY_ON_START) {
+    console.log('[BOC Backend] Startup Yahoo history refresh is disabled.');
+    return { skipped: true };
+  }
+
+  if (startupHistoryRefreshPromise) {
+    return startupHistoryRefreshPromise;
+  }
+
+  startupHistoryRefreshPromise = (async () => {
+    console.log('[BOC Backend] Starting Yahoo history refresh on startup...');
+
+    const summary = await refreshYahooHistory({
+      dataDir: DATA_DIR,
+      currencyMap: CURRENCY_MAP,
+      timeoutMs: Math.max(REQUEST_TIMEOUT_MS, 15000),
+      sleepMs: 500,
+      logger: console,
+    });
+
+    await reloadHistoryStore();
+
+    console.log(
+      `[BOC Backend] Startup Yahoo history refresh completed. Success=${summary.successCount}, Failed=${summary.failureCount}`
+    );
+
+    return summary;
+  })();
+
+  try {
+    return await startupHistoryRefreshPromise;
+  } finally {
+    startupHistoryRefreshPromise = null;
+  }
+};
+
 app.post('/api/notify/telegram', async (req, res) => {
   const botToken = `${req.body?.botToken || TELEGRAM_BOT_TOKEN}`.trim();
   const chatId = `${req.body?.chatId || TELEGRAM_CHAT_ID}`.trim();
@@ -834,6 +879,15 @@ app.post('/api/notify/telegram', async (req, res) => {
 });
 
 await loadHistoryStore();
+
+try {
+  // Run the Yahoo backfill before the worker starts so NDJSON writes stay serialized.
+  await refreshYahooHistoryOnStartup();
+} catch (error) {
+  const details = error instanceof Error ? error.message : '未知错误';
+  console.error('[BOC Backend] Startup Yahoo history refresh failed:', details);
+}
+
 restartBackgroundWorker();
 
 app.listen(PORT, '0.0.0.0', () => {
