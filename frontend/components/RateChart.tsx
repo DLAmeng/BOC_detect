@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { RateData } from '../types.ts';
 import { fetchRateHistory } from '../utils/api.ts';
-import { calculateThresholds } from '../utils/rateStats.ts';
+import { calculateThresholdsWithMeta } from '../utils/rateStats.ts';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { Info, AlertCircle } from 'lucide-react';
 
 type TimeRange = '24h' | '7d' | '14d' | '30d' | '3m' | '6m' | '1y';
 
@@ -179,7 +180,7 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
         };
     });
 
-    const thresholds = calculateThresholds(mergedHistory, currency, windowDays);
+    const { thresholds, meta } = calculateThresholdsWithMeta(mergedHistory, currency, windowDays, true);
 
     const rates = displayData.flatMap((item) => [item.calculatedRate, item.bocRate].filter((v): v is number => v !== undefined));
     const extraPoints = [];
@@ -200,11 +201,27 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
     const maxRate = dataMax + padding;
 
     return (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 md:p-6 h-[350px] md:h-[420px] flex flex-col">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 md:p-6 h-auto min-h-[420px] flex flex-col">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 md:mb-6 gap-3 md:gap-4">
                 <div>
-                    <h3 className="text-gray-400 text-xs md:text-sm font-medium">真实汇率采样记录 ({currency})</h3>
-                    <p className="text-[10px] md:text-xs text-gray-500 mt-1">图表会合并后端持久化历史与当前会话内的最新采样数据。</p>
+                    <div className="flex items-center gap-2">
+                        <h3 className="text-gray-400 text-xs md:text-sm font-medium">真实汇率采样记录 ({currency})</h3>
+                        <span className="bg-blue-500/10 text-blue-400 text-[9px] px-1.5 py-0.5 rounded border border-blue-500/20">
+                            {windowDays}天计算窗口
+                        </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
+                        <p className="text-[10px] md:text-xs text-gray-500">
+                            窗口内样本: <span className={meta.insufficientWindowData ? 'text-yellow-500 font-bold' : 'text-gray-300'}>{meta.windowSampleCount}</span>
+                        </p>
+                        <p className="text-[10px] md:text-xs text-gray-500">
+                            总历史样本: <span className="text-gray-300">{meta.totalSampleCount}</span>
+                        </p>
+                        <p className="text-[10px] md:text-xs text-gray-500 flex items-center gap-1">
+                            <Info className="w-3 h-3 text-gray-600" />
+                            <span className="text-gray-600 truncate max-w-[120px] md:max-w-none">图表范围不影响阈值计算</span>
+                        </p>
+                    </div>
                     {historyError && <p className="text-[10px] md:text-xs text-red-400 mt-1">历史数据加载失败：{historyError}</p>}
                 </div>
                 <div className="flex flex-wrap bg-gray-950 rounded-lg p-1 border border-gray-800 gap-1 w-full sm:w-auto">
@@ -224,7 +241,17 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
                 </div>
             </div>
 
-            <div className="flex-grow w-full min-h-0">
+            {meta.insufficientWindowData && (
+                <div className="mb-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-3 flex items-start gap-3">
+                    <AlertCircle className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" />
+                    <p className="text-[10px] md:text-xs text-yellow-200/80 leading-relaxed">
+                        当前 <span className="font-bold text-yellow-400">{windowDays}天</span> 计算窗口内样本不足（仅 {meta.windowSampleCount} 个，需 5 个），暂不绘制动态阈值线。
+                        您可以修改配置扩大窗口，或等待后台积累更多采样数据。
+                    </p>
+                </div>
+            )}
+
+            <div className="flex-grow w-full min-h-[250px] md:min-h-[300px]">
                 <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />

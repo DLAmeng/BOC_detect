@@ -321,8 +321,13 @@ const App: React.FC = () => {
 
     const handleSaveConfig = async (newConfig: SystemConfig) => {
         try {
+            const oldWindow = state.config.calculationWindowDays;
             const savedConfig = await saveMonitorConfig(newConfig);
             
+            if (process.env.NODE_ENV === 'development') {
+                console.log(`[Frontend Debug] Config saved. WindowDays: ${oldWindow} -> ${savedConfig.calculationWindowDays}`);
+            }
+
             try {
                 localStorage.setItem(STORAGE_KEY, JSON.stringify(savedConfig));
             } catch { /* ignore */ }
