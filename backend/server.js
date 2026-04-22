@@ -621,6 +621,9 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
   const bocRate = rateRecord.bocRate;
   const leaveThreshold = goodZoneUpper + buffer;
   const minDropToNotify = range * 0.02; // 至少跌幅达到波动范围的 2% 才重复通知，防抖
+  
+  const NOTIFY_COOLDOWN_MS = 60 * 60 * 1000; // 同级别通知冷却 1 小时
+  const LEAVE_CONFIRM_MS = 30 * 60 * 1000;   // 离开区间需持续确认 30 分钟
 
   // Initialize state flags
   global.alertStateFlags = global.alertStateFlags || {};
@@ -628,12 +631,19 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
     global.alertStateFlags[currencyCode] = {
       hasNotifiedGood: false,
       hasNotifiedBest: false,
-      lastNotifiedRate: null
+      lastNotifiedRate: null,
+      lastNotifiedTime: null,
+      firstLeaveTime: null
     };
   }
 
   const state = global.alertStateFlags[currencyCode];
   const messages = [];
+
+  const canNotify = () => {
+    if (!state.lastNotifiedTime) return true;
+    return (Date.now() - state.lastNotifiedTime) > NOTIFY_COOLDOWN_MS;
+  };
 
   const buildMessage = (title, advice, showComparison = false) => {
     let msg = `${title}\n`;
@@ -653,6 +663,8 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
   };
 
   if (currentRate <= bestZoneUpper) {
+    state.firstLeaveTime = null; // 重置离开确认时间
+    
     if (!state.hasNotifiedBest) {
       // First time entering best zone
       state.hasNotifiedBest = true;
@@ -660,39 +672,53 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
       
       messages.push(buildMessage(`📉 [${rateRecord.currencyName}] 进入强烈换汇区`, '适合优先换汇', false));
       state.lastNotifiedRate = currentRate;
-    } else if (state.lastNotifiedRate && (state.lastNotifiedRate - currentRate) >= minDropToNotify) {
-      // Still in best zone, and significantly lower than last notified
+      state.lastNotifiedTime = Date.now();
+    } else if (state.lastNotifiedRate && (state.lastNotifiedRate - currentRate) >= minDropToNotify && canNotify()) {
+      // Still in best zone, significantly lower, and cooldown passed
       messages.push(buildMessage(`📉 [${rateRecord.currencyName}] 强烈换汇区内发现更低汇率`, '适合优先换汇', true));
       state.lastNotifiedRate = currentRate;
+      state.lastNotifiedTime = Date.now();
     }
   } else if (currentRate <= goodZoneUpper) {
+    state.firstLeaveTime = null; // 重置离开确认时间
+    
     if (!state.hasNotifiedGood) {
       // First time entering good zone
       state.hasNotifiedGood = true;
       
       messages.push(buildMessage(`✅ [${rateRecord.currencyName}] 进入适合换汇区`, '可考虑分批换汇', false));
       state.lastNotifiedRate = currentRate;
-    } else if (state.lastNotifiedRate && (state.lastNotifiedRate - currentRate) >= minDropToNotify) {
-      // Still in good zone, and significantly lower than last notified
+      state.lastNotifiedTime = Date.now();
+    } else if (state.lastNotifiedRate && (state.lastNotifiedRate - currentRate) >= minDropToNotify && canNotify()) {
+      // Still in good zone, significantly lower, and cooldown passed
       messages.push(buildMessage(`✅ [${rateRecord.currencyName}] 适合换汇区内发现更低汇率`, '可考虑分批换汇', true));
       state.lastNotifiedRate = currentRate;
+      state.lastNotifiedTime = Date.now();
     }
   } else if (currentRate > leaveThreshold) {
     if (state.hasNotifiedGood || state.hasNotifiedBest) {
-      // Leaving zones
-      state.hasNotifiedGood = false;
-      state.hasNotifiedBest = false;
-      state.lastNotifiedRate = null;
-      
-      let msg = `📈 [${rateRecord.currencyName}] 已离开适合换汇区\n`;
-      if (bocRate) {
-        msg += `BOC 卖出价：¥${bocRate.toFixed(4)}\n`;
+      // 记录初次离开时间
+      if (!state.firstLeaveTime) {
+        state.firstLeaveTime = Date.now();
+        console.log(`[BOC Backend Background] ${currencyCode} crossed leave threshold, waiting for confirmation...`);
+      } else if (Date.now() - state.firstLeaveTime >= LEAVE_CONFIRM_MS) {
+        // 只有持续超过 30 分钟才确认离开
+        state.hasNotifiedGood = false;
+        state.hasNotifiedBest = false;
+        state.lastNotifiedRate = null;
+        state.lastNotifiedTime = null;
+        state.firstLeaveTime = null;
+        
+        let msg = `📈 [${rateRecord.currencyName}] 已离开适合换汇区\n`;
+        if (bocRate) {
+          msg += `BOC 卖出价：¥${bocRate.toFixed(4)}\n`;
+        }
+        msg += `当前参考价：¥${currentRate.toFixed(4)}\n`;
+        msg += `适合区上限：¥${goodZoneUpper.toFixed(4)}\n`;
+        msg += `\n已持续高于上限超过 30 分钟，建议观望`;
+        
+        messages.push(msg);
       }
-      msg += `当前参考价：¥${currentRate.toFixed(4)}\n`;
-      msg += `适合区上限：¥${goodZoneUpper.toFixed(4)}\n`;
-      msg += `\n已高于上限，建议观望`;
-      
-      messages.push(msg);
     }
   }
 
