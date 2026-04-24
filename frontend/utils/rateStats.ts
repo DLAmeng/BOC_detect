@@ -74,10 +74,23 @@ export const calculateThresholdsWithMeta = (
         }
     }
 
-    // 3. 计算百分位
-    const rates = pool
-        .map(r => r.calculatedRate)
-        .filter(r => r > 0)
+    // 3. 按小时聚合数据点，以消除高频实时采样对百分位数计算的权重污染
+    const hourlyBuckets: Record<number, number[]> = {};
+    for (const r of pool) {
+        if (!r.calculatedRate || r.calculatedRate <= 0) continue;
+        const hourKey = Math.floor(r.fetchTimestampMs / (60 * 60 * 1000));
+        if (!hourlyBuckets[hourKey]) {
+            hourlyBuckets[hourKey] = [];
+        }
+        hourlyBuckets[hourKey].push(r.calculatedRate);
+    }
+
+    // 每个小时取平均值作为一个代表性样本点
+    const rates = Object.values(hourlyBuckets)
+        .map(bucketRates => {
+            const sum = bucketRates.reduce((a, b) => a + b, 0);
+            return sum / bucketRates.length;
+        })
         .sort((a, b) => a - b);
     
     const effectiveSampleCount = rates.length;

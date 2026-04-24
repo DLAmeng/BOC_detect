@@ -587,12 +587,27 @@ const calculateDynamicThresholds = async (currencyCode, windowDays = 14) => {
     usedFallback = true;
   }
 
-  const rates = pool
-    .map(r => r.calculatedRate)
-    .filter(r => r > 0)
+  // 按小时聚合数据点，以消除高频实时采样对百分位数计算的权重污染
+  const hourlyBuckets = new Map();
+  for (const r of pool) {
+    if (!r.calculatedRate || r.calculatedRate <= 0) continue;
+    // 取小时级别的时间戳作为 Key
+    const hourKey = Math.floor(r.fetchTimestampMs / (60 * 60 * 1000));
+    if (!hourlyBuckets.has(hourKey)) {
+      hourlyBuckets.set(hourKey, []);
+    }
+    hourlyBuckets.get(hourKey).push(r.calculatedRate);
+  }
+
+  // 每个小时取平均值作为一个代表性样本点
+  const rates = Array.from(hourlyBuckets.values())
+    .map(bucketRates => {
+      const sum = bucketRates.reduce((a, b) => a + b, 0);
+      return sum / bucketRates.length;
+    })
     .sort((a, b) => a - b);
     
-  if (rates.length < 5) return null; // Too few data points for reliable calculation
+  if (rates.length < 5) return null; // Too few hourly data points for reliable calculation
   
   const p10 = rates[Math.floor(rates.length * 0.10)];
   const p90 = rates[Math.floor(rates.length * 0.90)];
