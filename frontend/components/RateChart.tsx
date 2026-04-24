@@ -36,7 +36,54 @@ const RANGES: { value: TimeRange; label: string }[] = [
     { value: '1y', label: '1Y' },
 ];
 
-export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 }) => {
+/**
+ * 对高频采样数据进行前端重采样平滑处理
+ * 确保图表在数据点极其密集时依然保持“丝滑”感
+ */
+const resampleData = (data: RateData[], range: TimeRange): RateData[] => {
+    // 如果数据点很少（例如只有几十个点），不需要重采样
+    if (data.length < 150) return data;
+
+    let bucketMs: number;
+    switch (range) {
+        case '24h': bucketMs = 10 * 60 * 1000; break; // 10 分钟一个点
+        case '7d':  bucketMs = 60 * 60 * 1000; break; // 1 小时一个点
+        case '14d': bucketMs = 2 * 60 * 60 * 1000; break; // 2 小时
+        case '30d': bucketMs = 4 * 60 * 60 * 1000; break; // 4 小时
+        case '3m':  bucketMs = 12 * 60 * 60 * 1000; break; // 12 小时
+        default:    bucketMs = 24 * 60 * 60 * 1000; // 1 天
+    }
+
+    const buckets = new Map<number, RateData[]>();
+    data.forEach(item => {
+        const key = Math.floor(item.fetchTimestampMs / bucketMs) * bucketMs;
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key)!.push(item);
+    });
+
+    return Array.from(buckets.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([key, items]) => {
+            // 计算桶内均值
+            const avgRate = items.reduce((sum, i) => sum + (i.calculatedRate || 0), 0) / items.length;
+            const bocRates = items.map(i => i.bocRate).filter((v): v is number => v !== undefined);
+            const avgBocRate = bocRates.length > 0 
+                ? bocRates.reduce((a, b) => a + b, 0) / bocRates.length 
+                : undefined;
+            
+            // 取桶内最后一个点作为元数据基础
+            const lastItem = items[items.length - 1];
+            
+            return {
+                ...lastItem,
+                fetchTimestampMs: key, 
+                calculatedRate: Number(avgRate.toFixed(4)),
+                bocRate: avgBocRate ? Number(avgBocRate.toFixed(4)) : undefined
+            };
+        });
+};
+
+export const RateChart = ({ history, currency, windowDays = 14 }: Props) => {
     const [timeRange, setTimeRange] = useState<TimeRange>('7d');
     const [persistedHistory, setPersistedHistory] = useState<RateData[]>([]);
     const [historyError, setHistoryError] = useState<string | null>(null);
@@ -48,8 +95,6 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
         const loadHistory = async () => {
             setIsLoadingHistory(true);
             try {
-                // Request enough items to show 1-year of history.
-                // 1 year of daily items is ~365. Plus intraday polling data.
                 const items = await fetchRateHistory(currency, 10000);
                 if (isActive) {
                     setPersistedHistory(items);
@@ -76,8 +121,6 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
 
     const mergedMap = new Map<string, RateData>();
     [...persistedHistory, ...history].forEach((item) => {
-        // Use fetchTimestampMs as the primary unique key to perfectly handle 
-        // Yahoo's daily data mixing with BOC's intraday data
         const key = item.fetchTimestampMs.toString();
         mergedMap.set(key, item);
     });
@@ -87,16 +130,14 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
     );
 
     const now = Date.now();
-    const displayData = mergedHistory.filter((item) => now - item.fetchTimestampMs <= RANGE_WINDOWS[timeRange]);
+    // Use type assertion to satisfy TS indexing requirements
+    const rangeWindow = RANGE_WINDOWS[timeRange as TimeRange];
+    const rawDisplayData = mergedHistory.filter((item) => now - item.fetchTimestampMs <= rangeWindow);
+    
+    // 应用重采样逻辑平滑曲线
+    const displayData = resampleData(rawDisplayData, timeRange);
 
-    // Safety fallback: if we are in 24h mode and have no data but have 1y data, show a message 
-    // or keep the 24h empty state if that's expected. 
-    // But for a better UX, we only render the Chart if we have at least 2 points.
     const hasEnoughData = displayData.length >= 2;
-
-    // 如果没有展示数据，但总的有历史数据，可能是时间范围选得太窄了 (24h)
-    // 这种情况下不应该显示白屏或加载中，而应该显示带警告的标题头
-    const shouldShowEmptyState = !hasEnoughData && mergedHistory.length > 0;
 
     if (isLoadingHistory && mergedHistory.length === 0) {
         return (
@@ -158,22 +199,17 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
         );
     }
 
-    const useDayLabel = timeRange !== '24h';
     const chartData = displayData.map((item) => {
         let yahooRate: number | undefined = item.calculatedRate;
         let bocRate: number | undefined = item.bocRate;
 
-        // Legacy record handling: 
-        // If it was a BOC-only record, it won't have bocRate set, but calculatedRate was the BOC rate.
         if (item.source && (item.source.includes('boc.cn') || item.source === 'BOC')) {
             bocRate = item.calculatedRate;
-            yahooRate = undefined; // We don't have yahoo data for these legacy points
+            yahooRate = undefined;
         }
         
-        // If it was a Yahoo-only record (Historical), calculatedRate is Yahoo.
         if (item.source && item.source.includes('Yahoo Finance')) {
             yahooRate = item.calculatedRate;
-            // bocRate remains undefined
         }
 
         return {
@@ -196,9 +232,6 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
     const dataMin = allValues.length > 0 ? Math.min(...allValues) : 0;
     const dataMax = allValues.length > 0 ? Math.max(...allValues) : 1;
     const diff = dataMax - dataMin;
-    
-    // Use 10% of the actual data spread as padding, ensuring small values like JPY are not squashed.
-    // If diff is 0 (one point), fallback to 0.5% of the value.
     const padding = diff === 0 ? dataMin * 0.005 : diff * 0.1;
     
     const minRate = dataMin - padding;
@@ -335,7 +368,7 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
                             dataKey="rate"
                             stroke="#3b82f6"
                             isAnimationActive={false}
-                            strokeWidth={2}
+                            strokeWidth={1.5}
                             dot={false}
                             activeDot={{ r: 4, fill: '#3b82f6', stroke: '#1e3a8a', strokeWidth: 2 }}
                             connectNulls
@@ -345,7 +378,7 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
                             type="monotone"
                             dataKey="bocRate"
                             stroke="#f59e0b"
-                            strokeWidth={1.5}
+                            strokeWidth={1}
                             strokeDasharray="4 2"
                             dot={false}
                             activeDot={{ r: 3, fill: '#f59e0b', stroke: '#78350f', strokeWidth: 2 }}
@@ -356,7 +389,6 @@ export const RateChart: React.FC<Props> = ({ history, currency, windowDays = 14 
                 </ResponsiveContainer>
             </div>
 
-            {/* Explanatory Legend below the chart area */}
             <div className="mt-2 md:mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 px-1 border-t border-gray-800/50 pt-3 md:pt-4">
                 <div className="flex items-center gap-2">
                     <div className="w-4 h-0.5 bg-[#3b82f6] rounded-full"></div>
