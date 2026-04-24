@@ -1,24 +1,32 @@
 # BOC Detect
 
-中国银行多币种汇率监控项目。当前版本已经移除所有模拟数据逻辑，前端可同时监控多种货币，并通过真实 Node.js 后端抓取中国银行官网汇率；后端会持久化历史汇率，并可发送 Telegram 到价提醒。
+中国银行多币种汇率监控项目。当前版本已升级为**双数据源架构**，引入了 **Yahoo Finance** 高频汇率作为主参考，并保留 **中国银行（BOC）官网** 汇率作为实盘对比。
 
-## 项目分析
+后端已集成 **后台监控系统 (Background Worker)**，可自动执行轮询、持久化历史记录、动态计算汇率阈值，并通过 Telegram 发送分级告警通知（适合换汇区 / 强烈换汇区）。
 
-项目现在由两部分组成：
+## 核心特性
 
-- `frontend/`
-  React + Vite 控制台，用于展示多币种实时汇率、历史走势、告警日志和监控配置。
-- `backend/`
-  Express 抓取服务，负责请求中国银行外汇牌价页面、保存历史汇率，并代发 Telegram 通知。
+- **双数据源校验**：主攻 Yahoo Finance 实时接口，辅以 BOC 官网爬虫，确保汇率参考与银行挂牌价同步。
+- **后台自动监控**：后端独立运行 Background Worker，无需前端常开即可实现 7x24 小时监控。
+- **动态阈值模型**：基于过去 14 天（可配置）的历史汇率位点（p10/p90），动态生成“适合换汇”与“强烈换汇”区间。
+- **分级通知策略**：命中不同区间触发不同强度的 Telegram 提醒，并具备防抖机制避免消息轰炸。
+- **数据持久化升级**：历史汇率按币种存储为独立的 `.ndjson` 文件，支持启动时自动回填 Yahoo 近一年历史数据。
 
-核心链路如下：
+## 项目结构
 
-1. 前端在同一轮询周期内按顺序请求每个选中的币种，例如 `/api/rates?currency=AUD`
-2. 后端抓取 [中国银行外汇牌价](https://www.boc.cn/sourcedb/whpj/)
-3. 后端返回 `rawSellingRate`、`calculatedRate`、`pubTime`、`fetchTime`
-4. 后端把新汇率写入持久化历史文件
-5. 前端按币种分别更新卡片、图表、日志和到价提醒
-6. 命中目标价后，后端可继续转发 Telegram 消息
+- `frontend/`：React + Vite 控制台。用于展示多币种实时对比、历史走势图表、告警日志，并可动态下发后端监控配置。
+- `backend/`：Node.js (Express) 服务。负责后台轮询、数据抓取（Yahoo & BOC）、动态阈值计算、Telegram 发信。
+
+## 核心链路
+
+1. **启动与回填**：后端启动时若开启 `AUTO_REFRESH_YAHOO_HISTORY_ON_START`，将自动从 Yahoo Finance 拉取各币种过去一年的历史日线数据。
+2. **后台轮询 (Background Worker)**：
+   - 根据 `monitor-config.json` 中的 `checkIntervalSeconds` 定时触发。
+   - 并发请求 Yahoo Finance 和中行外汇牌价。
+   - 自动对比历史数据，计算当前处于哪个换汇区间（Best / Good / Wait）。
+   - 将最新数据点追加到 `backend/data/rates-{CODE}.ndjson`。
+3. **告警下发**：若检测到汇率进入更优区间，通过 Telegram API 发送格式化通知。
+4. **前端同步**：前端通过 API 获取后端实时抓取的数据和配置状态。
 
 ## 本地开发
 
@@ -35,10 +43,8 @@ npm run dev
 ```
 
 默认端口：
-
 - 前端：`http://localhost:5173`
 - 后端：`http://localhost:3001`
-- 健康检查：`http://localhost:3001/api/health`
 
 ## Docker Compose
 
@@ -46,75 +52,35 @@ npm run dev
 docker compose up --build
 ```
 
-默认端口：
-
-- 前端：`http://localhost:8080`
+- 前端（Nginx 转发）：`http://localhost:8080`
 - 后端 API：`http://localhost:3001`
 
-`docker-compose` 已为后端挂载持久化卷 `backend-data`，历史汇率会保存在容器外。
+`docker-compose` 已为后端挂载持久化卷 `backend-data`，所有 `.ndjson` 历史文件和监控配置文件均保存在容器外。
 
-## 可用接口
+## API 接口说明
 
-### `GET /api/health`
+### 监控配置
+- `GET /api/config`：获取当前后台监控配置（轮询间隔、币种、通知 ID 等）。
+- `PUT /api/config`：动态修改监控配置，保存后后台 Worker 将自动重启。
 
-返回服务健康状态、历史文件路径，以及后端是否已配置 Telegram 环境变量。
+### 汇率数据
+- `GET /api/rates?currency=AUD`：获取特定币种的最新抓取结果（含 Yahoo 与 BOC 对比）。
+- `GET /api/history?currency=AUD&limit=1000`：获取历史记录。
 
-### `GET /api/rates?currency=AUD`
+### 维护工具
+- `POST /api/history/reload`：手动强制重新加载所有币种的 NDJSON 缓存。
+- `GET /api/health`：服务健康状态及环境变量加载情况。
 
-返回指定币种的真实汇率数据，并在数据发生变化时持久化到历史文件。多个币种会由前端在同一个监控周期内逐个请求。
+## 环境变量 (backend/.env)
 
-### `GET /api/history?currency=AUD&limit=500`
-
-返回指定币种的历史汇率记录。
-
-### `POST /api/notify/telegram`
-
-请求体示例：
-
-```json
-{
-  "messages": ["测试消息"],
-  "botToken": "123456:token",
-  "chatId": "123456789"
-}
-```
-
-如果请求体未提供 `botToken` / `chatId`，后端会尝试使用环境变量中的 Telegram 配置。
+- `PORT`：后端端口，默认 `3001`
+- `DATA_DIR`：数据存储路径，默认 `backend/data`
+- `AUTO_REFRESH_YAHOO_HISTORY_ON_START`：是否在启动时同步雅虎一年历史数据，默认 `true`
+- `TELEGRAM_BOT_TOKEN`：Telegram 机器人 Token
+- `TELEGRAM_CHAT_ID`：接收通知的 Chat ID
+- `CORS_ORIGIN`：允许跨域的域名
+- `REQUEST_TIMEOUT_MS`：抓取超时设置
 
 ## 支持币种
 
-- `AUD`
-- `USD`
-- `EUR`
-- `GBP`
-- `JPY`
-- `HKD`
-
-## 业务说明
-
-中国银行页面展示的是“每 100 外币”的卖出价。例如 468.25 表示 100 澳元兑换 468.25 人民币。系统会自动将该值除以 100，换算为更直观的 1 外币兑人民币价格，用于阈值监控。
-
-历史图表会合并两类数据：
-
-- 后端持久化保存的历史汇率
-- 当前会话内最新抓取的数据
-
-Telegram 通知策略：
-
-- 每个币种的到价提醒会立即发送
-- 异常通知只会在错误内容变化时再次发送，避免持续刷屏
-- 日志和告警状态按币种分别维护
-
-## 环境变量
-
-后端支持以下可选环境变量：
-
-- `PORT`：后端监听端口，默认 `3001`
-- `REQUEST_TIMEOUT_MS`：抓取超时，默认 `10000`
-- `BOC_SOURCE_URL`：中国银行汇率页面地址
-- `CORS_ORIGIN`：允许的跨域来源，默认 `*`
-- `DATA_DIR`：历史数据目录，默认 `backend/data`
-- `MAX_HISTORY_PER_CURRENCY`：每个币种最多保留的历史条数，默认 `5000`
-- `DEFAULT_HISTORY_LIMIT`：历史接口默认返回条数，默认 `500`
-- `TELEGRAM_BOT_TOKEN`：Telegram 机器人 Token
-- `TELEGRAM_CHAT_ID`：Telegram 目标聊天 ID
+目前支持：`AUD` (澳元), `USD` (美元), `EUR` (欧元), `GBP` (英镑), `JPY` (日元), `HKD` (港币)。
