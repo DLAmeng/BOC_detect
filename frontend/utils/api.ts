@@ -45,7 +45,6 @@ const normalizeRateData = (data: any): RateData => {
 
 export const fetchRealRate = async (currency: string): Promise<RateData> => {
     try {
-        console.log(`[Frontend] Fetching real rate for ${currency}...`);
         const response = await fetch(`${getApiBaseUrl()}/rates?currency=${encodeURIComponent(currency)}`);
 
         if (!response.ok) {
@@ -55,7 +54,6 @@ export const fetchRealRate = async (currency: string): Promise<RateData> => {
         }
 
         const data = await response.json();
-        console.log(`[Frontend] Fetch real rate for ${currency} successful`, data);
         return normalizeRateData(data);
     } catch (error) {
         console.error(`[Frontend] Failed to fetch real rate for ${currency}:`, error);
@@ -106,6 +104,25 @@ export const saveMonitorConfig = async (config: any): Promise<any> => {
     }
 
     return data.config;
+};
+
+export const fetchDashboardData = async (): Promise<{
+    rates: Record<string, { current: RateData; previous: RateData }>;
+    alerts: any[];
+}> => {
+    const response = await fetch(`${getApiBaseUrl()}/dashboard`);
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data = await response.json();
+    return {
+        rates: data.rates,
+        alerts: data.alerts
+    };
+};
+
+export const clearBackendAlerts = async (): Promise<void> => {
+    await fetch(`${getApiBaseUrl()}/alerts`, { method: 'DELETE' });
 };
 
 export const sendTelegramNotifications = async ({

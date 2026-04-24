@@ -122,8 +122,6 @@ export const calculateThresholdsWithMeta = (
 
     const thresholds = { p10, p90, range, bestZoneUpper, goodZoneUpper, buffer };
 
-    console.log(`[Frontend Threshold Meta] ${currencyCode} | Requested: ${windowDays}d | Strict: ${strictWindow} | Fallback: ${usedFallback} | WinCount: ${windowSampleCount} | Final: ${effectiveSampleCount} | bestZone: ${bestZoneUpper.toFixed(4)}`);
-
     return {
         thresholds,
         meta: {

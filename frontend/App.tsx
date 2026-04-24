@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SystemState, SystemConfig, RateData, AlertLog, MonitoredCurrencyConfig } from './types.ts';
 import { DEFAULT_MONITORED_CURRENCIES } from './constants/currencies.ts';
-import { fetchRealRate, fetchRateHistory, sendTelegramNotifications, fetchMonitorConfig, saveMonitorConfig } from './utils/api.ts';
-import { processRateData, createErrorAlert, createInfoAlert } from './utils/alertLogic.ts';
-import { calculateThresholds } from './utils/rateStats.ts';
+import { fetchDashboardData, clearBackendAlerts, fetchRateHistory, fetchMonitorConfig, saveMonitorConfig } from './utils/api.ts';
 import { DashboardCard } from './components/DashboardCard.tsx';
 import { RateChart } from './components/RateChart.tsx';
 import { AdminPage } from './components/AdminPage.tsx';
@@ -23,6 +21,7 @@ const INITIAL_CONFIG: SystemConfig = {
     monitoredCurrencies: DEFAULT_MONITORED_CURRENCIES,
     checkIntervalSeconds: 10,
     calculationWindowDays: 14,
+    trendComparisonMinutes: 60,
     isRunning: true,
     webhookUrl: '',
     telegramBotToken: '',
@@ -139,6 +138,7 @@ const App: React.FC = () => {
     }, []);
 
     const [isFetching, setIsFetching] = useState(false);
+    const isFetchingRef = useRef(false);
     const [view, setView] = useState<'dashboard' | 'admin'>('dashboard');
     const [showLogs, setShowLogs] = useState(true);
     const [activeChartCurrency, setActiveChartCurrency] = useState(
@@ -202,107 +202,56 @@ const App: React.FC = () => {
         const currentState = stateRef.current;
         const monitoredCurrencies = currentState.config.monitoredCurrencies;
 
-        if (!currentState.config.isRunning || isFetching || monitoredCurrencies.length === 0) {
+        if (!currentState.config.isRunning || isFetchingRef.current || monitoredCurrencies.length === 0) {
             return;
         }
 
+        isFetchingRef.current = true;
         setIsFetching(true);
 
-        const nextCurrentRates = { ...currentState.currentRates };
-        const nextPreviousRates = { ...currentState.previousRates };
-        const nextHistoryByCurrency = { ...currentState.historyByCurrency };
-        const nextLastErrors = { ...currentState.lastErrors };
-        const nextLastAlertedRates = { ...currentState.lastAlertedRates };
-        const cycleAlerts: AlertLog[] = [];
-        const notificationMessages: string[] = [];
-
         try {
-            // Sequential fetching is gentler to the source site than bursting parallel requests.
-            for (const currencyConfig of monitoredCurrencies) {
-                const currency = currencyConfig.currency;
-
-                try {
-                    const newRateData: RateData = await fetchRealRate(currency);
-                    const currentRate = currentState.currentRates[currency] ?? null;
-                    const history = currentState.historyByCurrency[currency] ?? [];
-                    const thresholds = calculateThresholds(history, currency, currentState.config.calculationWindowDays);
-
-                    const { alerts } = processRateData(
-                        newRateData,
-                        currentRate,
-                        currencyConfig,
-                        thresholds
-                    );
-
-                    const hasNewPoint =
-                        newRateData.rawSellingRate !== currentRate?.rawSellingRate ||
-                        newRateData.pubTime !== currentRate?.pubTime;
-
-                    nextCurrentRates[currency] = newRateData;
-                    nextPreviousRates[currency] = hasNewPoint ? currentRate : currentState.previousRates[currency] ?? null;
-                    nextHistoryByCurrency[currency] = hasNewPoint
-                        ? [...(currentState.historyByCurrency[currency] ?? []), newRateData].slice(-MAX_HISTORY_POINTS)
-                        : currentState.historyByCurrency[currency] ?? [];
-                    nextLastErrors[currency] = null;
-                    nextLastAlertedRates[currency] = null; // No longer used for target rate
-
-                    cycleAlerts.push(...alerts);
-                    notificationMessages.push(
-                        ...alerts
-                            .filter((alert) => alert.type === 'target_hit')
-                            .map((alert) => alert.message)
-                    );
-                } catch (error: any) {
-                    const message = error?.message || '未知错误';
-                    const errorAlert = createErrorAlert(currency, message);
-                    cycleAlerts.push(errorAlert);
-                    nextLastErrors[currency] = message;
-
-                    if ((currentState.lastErrors[currency] ?? null) !== message) {
-                        notificationMessages.push(errorAlert.message);
-                    }
-                }
-            }
-
-            // Telegram notifications are now handled exclusively by the backend background worker
-            // to avoid duplicate alerts and ensure monitoring works even when the dashboard is closed.
-            /*
-            if (notificationMessages.length > 0) {
-                try {
-                    const result = await sendTelegramNotifications({
-                        messages: notificationMessages,
-                        botToken: currentState.config.telegramBotToken,
-                        chatId: currentState.config.telegramChatId
-                    });
-
-                    if (!result.success && !result.skipped) {
-                        throw new Error(result.reason || '未知错误');
-                    }
-                } catch (telegramError: any) {
-                    cycleAlerts.unshift(
-                        createInfoAlert(`[Telegram] 通知发送失败：${telegramError?.message || '未知错误'}`)
-                    );
-                }
-            }
-            */
+            const data = await fetchDashboardData();
+            
+            const nextCurrentRates: Record<string, RateData | null> = {};
+            const nextPreviousRates: Record<string, RateData | null> = {};
+            
+            Object.entries(data.rates).forEach(([code, item]) => {
+                nextCurrentRates[code] = item.current;
+                nextPreviousRates[code] = item.previous;
+            });
 
             setState((prev: SystemState) => {
                 const liveCurrencies = prev.config.monitoredCurrencies;
+                
+                // Keep history updated by appending new points
+                const updatedHistory = { ...prev.historyByCurrency };
+                Object.entries(nextCurrentRates).forEach(([code, currentRate]) => {
+                    if (!currentRate) return;
+                    const history = updatedHistory[code] || [];
+                    const lastHistory = history[history.length - 1];
+                    
+                    // Only append if it's a new timestamp to prevent redundant points
+                    if (!lastHistory || lastHistory.fetchTimestampMs !== currentRate.fetchTimestampMs) {
+                        updatedHistory[code] = [...history, currentRate].slice(-MAX_HISTORY_POINTS);
+                    }
+                });
 
                 return {
                     ...prev,
                     currentRates: syncRateMap(nextCurrentRates, liveCurrencies),
                     previousRates: syncRateMap(nextPreviousRates, liveCurrencies),
-                    historyByCurrency: syncHistoryMap(nextHistoryByCurrency, liveCurrencies),
-                    alerts: [...cycleAlerts, ...prev.alerts].slice(0, 150),
-                    lastErrors: syncErrorMap(nextLastErrors, liveCurrencies),
-                    lastAlertedRates: syncAlertedRateMap(nextLastAlertedRates, liveCurrencies)
+                    historyByCurrency: syncHistoryMap(updatedHistory, liveCurrencies),
+                    alerts: (data.alerts || []).slice(0, 200),
+                    lastErrors: syncErrorMap({}, liveCurrencies)
                 };
             });
+        } catch (error: any) {
+            console.error('[Frontend] runCheck failed:', error);
         } finally {
+            isFetchingRef.current = false;
             setIsFetching(false);
         }
-    }, [isFetching]);
+    }, []);
 
     useEffect(() => {
         let intervalId: number | undefined;
@@ -365,8 +314,13 @@ const App: React.FC = () => {
         }
     };
 
-    const handleClearAlerts = () => {
-        setState((prev: SystemState) => ({ ...prev, alerts: [] }));
+    const handleClearAlerts = async () => {
+        try {
+            await clearBackendAlerts();
+            setState((prev: SystemState) => ({ ...prev, alerts: [] }));
+        } catch (error: any) {
+            alert('清空后端告警失败');
+        }
     };
 
     const monitoredCurrencies = state.config.monitoredCurrencies;

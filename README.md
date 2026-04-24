@@ -1,86 +1,80 @@
 # BOC Detect
 
-中国银行多币种汇率监控项目。当前版本已升级为**双数据源架构**，引入了 **Yahoo Finance** 高频汇率作为主参考，并保留 **中国银行（BOC）官网** 汇率作为实盘对比。
-
-后端已集成 **后台监控系统 (Background Worker)**，可自动执行轮询、持久化历史记录、动态计算汇率阈值，并通过 Telegram 发送分级告警通知（适合换汇区 / 强烈换汇区）。
+中国银行多币种汇率监控项目。当前版本已升级为**完全服务端驱动的现代化架构**，前端作为纯展示层，所有核心判定、告警历史与趋势计算均由后端集中管理。
 
 ## 核心特性
 
-- **双数据源校验**：主攻 Yahoo Finance 实时接口，辅以 BOC 官网爬虫，确保汇率参考与银行挂牌价同步。
-- **后台自动监控**：后端独立运行 Background Worker，无需前端常开即可实现 7x24 小时监控。
-- **动态阈值模型**：基于过去 14 天（可配置）的历史汇率位点（p10/p90），动态生成“适合换汇”与“强烈换汇”区间。
-- **分级通知策略**：命中不同区间触发不同强度的 Telegram 提醒，并具备防抖机制避免消息轰炸。
-- **数据持久化升级**：历史汇率按币种存储为独立的 `.ndjson` 文件，支持启动时自动回填 Yahoo 近一年历史数据。
+- **双数据源校验**：主攻 Yahoo Finance 高频实时接口，辅以中国银行（BOC）官网爬虫作实盘参考。
+- **服务端驱动展示**：前端不再独立计算阈值。刷新网页时，直接从后端拉取完整的系统状态，彻底解决浏览器刷新导致的状态丢失问题。
+- **告警日志持久化**：后端集成 `alerts.json` 自动记录触发过的 Telegram 警报，支持告警历史的云端拉取与管理。
+- **后台自动监控**：独立运行 Background Worker，7x24 小时执行轮询、数据持久化与 Telegram 分级告警。
+- **动态阈值模型**：基于过去 14 天（可配置）的历史汇率位点（p10/p90），自动判定“适合换汇”与“强烈换汇”区间。
+- **可配置趋势对比**：支持在管理端自定义“对比跨度”（如 1 小时、1 天），自动算出当前汇率相对于该时间点的涨跌幅。
+- **数据持久化升级**：历史记录存储为单币种独立的 `.ndjson` 文件，支持启动时自动回填 Yahoo 近一年历史数据。
 
 ## 项目结构
 
-- `frontend/`：React + Vite 控制台。用于展示多币种实时对比、历史走势图表、告警日志，并可动态下发后端监控配置。
-- `backend/`：Node.js (Express) 服务。负责后台轮询、数据抓取（Yahoo & BOC）、动态阈值计算、Telegram 发信。
+- `frontend/`：React + Vite 控制台。作为“傻瓜式显示器”，负责渲染汇率卡片、丝滑图表及管理后端配置。
+- `backend/`：Node.js (Express) 服务。系统的“大脑”，负责轮询抓取、逻辑计算、告警持久化及 Telegram 通知。
 
 ## 核心链路
 
-1. **启动与回填**：后端启动时若开启 `AUTO_REFRESH_YAHOO_HISTORY_ON_START`，将自动从 Yahoo Finance 拉取各币种过去一年的历史日线数据。
+1. **初始化**：后端启动时若开启 `AUTO_REFRESH_YAHOO_HISTORY_ON_START`，将自动同步各币种过去一年的 Yahoo 历史日线数据。
 2. **后台轮询 (Background Worker)**：
-   - 根据 `monitor-config.json` 中的 `checkIntervalSeconds` 定时触发。
-   - 并发请求 Yahoo Finance 和中行外汇牌价。
-   - 自动对比历史数据，计算当前处于哪个换汇区间（Best / Good / Wait）。
-   - 将最新数据点追加到 `backend/data/rates-{CODE}.ndjson`。
-3. **告警下发**：若检测到汇率进入更优区间，通过 Telegram API 发送格式化通知。
-4. **前端同步**：前端通过 API 获取后端实时抓取的数据和配置状态。
+   - 根据监控配置定时并发抓取 Yahoo 与中行数据。
+   - 自动计算当前处于哪个换汇区间（Best / Good / Wait）。
+   - 触发告警时，同时发送 Telegram 消息并将其写入 `backend/data/alerts.json`。
+   - 将数据点追加到 `.ndjson` 历史文件中。
+3. **前端消费**：
+   - 前端通过 `/api/dashboard` 接口一键拉取所有监控币种的当前价、根据设定跨度算出的对比价、以及最新的系统告警日志。
+   - 即使网页刷新，通知栏与涨跌标识依然保持同步。
 
 ## 本地开发
 
 ### 1. 安装依赖
-
 ```bash
 npm install
 ```
 
-### 2. 启动前后端
-
+### 2. 启动服务
 ```bash
 npm run dev
 ```
 
 默认端口：
 - 前端：`http://localhost:5173`
-- 后端：`http://localhost:3001`
+- 后端 API：`http://localhost:3001`
 
 ## Docker Compose
-
 ```bash
 docker compose up --build
 ```
-
 - 前端（Nginx 转发）：`http://localhost:8080`
 - 后端 API：`http://localhost:3001`
 
-`docker-compose` 已为后端挂载持久化卷 `backend-data`，所有 `.ndjson` 历史文件和监控配置文件均保存在容器外。
+`docker-compose` 已为后端挂载持久化卷 `backend-data`，所有 `.ndjson` 历史文件、告警记录和监控配置文件均保存在容器外。
 
 ## API 接口说明
 
+### 仪表盘集成
+- `GET /api/dashboard`：【核心接口】获取所有监控币种的实时数据（current）、趋势对比数据（previous）以及持久化的告警日志列表。
+
+### 告警管理
+- `GET /api/alerts`：拉取后端保存的历史告警。
+- `DELETE /api/alerts`：清空后端告警记录。
+
 ### 监控配置
-- `GET /api/config`：获取当前后台监控配置（轮询间隔、币种、通知 ID 等）。
-- `PUT /api/config`：动态修改监控配置，保存后后台 Worker 将自动重启。
+- `GET /api/config`：获取当前后台监控配置。
+- `PUT /api/config`：动态修改配置（包含对比跨度 `trendComparisonMinutes` 等）。
 
-### 汇率数据
-- `GET /api/rates?currency=AUD`：获取特定币种的最新抓取结果（含 Yahoo 与 BOC 对比）。
-- `GET /api/history?currency=AUD&limit=1000`：获取历史记录。
-
-### 维护工具
-- `POST /api/history/reload`：手动强制重新加载所有币种的 NDJSON 缓存。
-- `GET /api/health`：服务健康状态及环境变量加载情况。
+### 其他
+- `GET /api/rates?currency=AUD`：实时手动抓取单币种汇率。
+- `GET /api/history?currency=AUD&limit=1000`：拉取特定币种的历史记录。
+- `POST /api/history/reload`：强制刷新后端 NDJSON 缓存。
 
 ## 环境变量 (backend/.env)
 
-- `PORT`：后端端口，默认 `3001`
-- `DATA_DIR`：数据存储路径，默认 `backend/data`
-- `AUTO_REFRESH_YAHOO_HISTORY_ON_START`：是否在启动时同步雅虎一年历史数据，默认 `true`
-- `TELEGRAM_BOT_TOKEN`：Telegram 机器人 Token
-- `TELEGRAM_CHAT_ID`：接收通知的 Chat ID
-- `CORS_ORIGIN`：允许跨域的域名
-- `REQUEST_TIMEOUT_MS`：抓取超时设置
-
-## 支持币种
-
-目前支持：`AUD` (澳元), `USD` (美元), `EUR` (欧元), `GBP` (英镑), `JPY` (日元), `HKD` (港币)。
+- `PORT`：后端端口
+- `DATA_DIR`：数据存储路径
+- `AUTO_REFRESH_YAHOO_HISTORY_ON_START`：启动时回填开关，默认 `true`
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`：告警通知配置

@@ -30,6 +30,7 @@ export interface SystemConfig {
     monitoredCurrencies: MonitoredCurrencyConfig[];
     checkIntervalSeconds: number;
     calculationWindowDays: number;
+    trendComparisonMinutes: number;
     isRunning: boolean;
     webhookUrl: string;
     telegramBotToken: string;

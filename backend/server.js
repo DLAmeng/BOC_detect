@@ -19,6 +19,7 @@ const DEFAULT_MONITOR_CONFIG = {
   ],
   checkIntervalSeconds: 10,
   calculationWindowDays: 14,
+  trendComparisonMinutes: 60,
   isRunning: true,
   webhookUrl: '',
   telegramBotToken: '',
@@ -45,6 +46,7 @@ const AUTO_REFRESH_YAHOO_HISTORY_ON_START =
   `${process.env.AUTO_REFRESH_YAHOO_HISTORY_ON_START || 'true'}`.toLowerCase() !== 'false';
 
 const currencyFilePath = (code) => path.join(DATA_DIR, `rates-${code}.ndjson`);
+const ALERTS_FILE = path.join(DATA_DIR, 'alerts.json');
 const MONITOR_CONFIG_FILE = path.join(DATA_DIR, 'monitor-config.json');
 const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || '').trim();
@@ -106,6 +108,9 @@ const loadMonitorConfig = async () => {
     if (typeof config.calculationWindowDays !== 'number') {
       config.calculationWindowDays = DEFAULT_MONITOR_CONFIG.calculationWindowDays;
     }
+    if (typeof config.trendComparisonMinutes !== 'number') {
+      config.trendComparisonMinutes = DEFAULT_MONITOR_CONFIG.trendComparisonMinutes;
+    }
     if (!Array.isArray(config.monitoredCurrencies)) {
       config.monitoredCurrencies = DEFAULT_MONITOR_CONFIG.monitoredCurrencies;
     }
@@ -150,6 +155,11 @@ const saveMonitorConfig = async (newConfig) => {
     configToSave.calculationWindowDays = Number.isFinite(parsedWindow)
       ? Math.max(1, Math.min(365, parsedWindow))
       : DEFAULT_MONITOR_CONFIG.calculationWindowDays;
+
+    const parsedComparison = Number.parseInt(newConfig.trendComparisonMinutes, 10);
+    configToSave.trendComparisonMinutes = Number.isFinite(parsedComparison)
+      ? Math.max(1, Math.min(10080, parsedComparison)) // Max 1 week
+      : DEFAULT_MONITOR_CONFIG.trendComparisonMinutes;
       
     // 2. isRunning
     configToSave.isRunning = newConfig.isRunning !== undefined 
@@ -533,6 +543,82 @@ app.get('/api/history', async (req, res) => {
   });
 });
 
+app.get('/api/alerts', async (req, res) => {
+  try {
+    const raw = await fs.readFile(ALERTS_FILE, 'utf8');
+    const alerts = JSON.parse(raw);
+    return res.json({ success: true, alerts });
+  } catch (error) {
+    return res.json({ success: true, alerts: [] });
+  }
+});
+
+app.delete('/api/alerts', async (req, res) => {
+  try {
+    await fs.writeFile(ALERTS_FILE, JSON.stringify([], null, 2), 'utf8');
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: '清空告警失败' });
+  }
+});
+
+app.get('/api/dashboard', async (req, res) => {
+  try {
+    const config = await loadMonitorConfig();
+    const store = await loadHistoryStore();
+    const comparisonMs = config.trendComparisonMinutes * 60 * 1000;
+    const now = Date.now();
+    
+    const dashboardData = {
+      rates: {},
+      alerts: []
+    };
+    
+    // Get alerts
+    try {
+      const rawAlerts = await fs.readFile(ALERTS_FILE, 'utf8');
+      dashboardData.alerts = JSON.parse(rawAlerts);
+    } catch (e) {}
+    
+    // Get rates for monitored currencies
+    for (const item of config.monitoredCurrencies) {
+      const code = item.currency;
+      const history = store[code] || [];
+      
+      if (history.length > 0) {
+        const current = history[history.length - 1];
+        
+        // Find previous rate based on trendComparisonMinutes
+        let previous = history[0];
+        const targetTs = now - comparisonMs;
+        
+        // Binary search or simple reverse find
+        for (let i = history.length - 1; i >= 0; i--) {
+          if (history[i].fetchTimestampMs <= targetTs) {
+            previous = history[i];
+            break;
+          }
+        }
+        
+        dashboardData.rates[code] = {
+          current,
+          previous
+        };
+      } else {
+        dashboardData.rates[code] = {
+          current: null,
+          previous: null
+        };
+      }
+    }
+    
+    res.json({ success: true, ...dashboardData });
+  } catch (error) {
+    console.error('[BOC Backend] Dashboard API failed:', error);
+    res.status(500).json({ success: false, error: '获取仪表盘数据失败' });
+  }
+});
+
 app.get('/api/rates', async (req, res) => {
   const currencyCode = `${req.query.currency || 'AUD'}`.toUpperCase();
 
@@ -705,7 +791,13 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
   } else if (currentRate <= goodZoneUpper) {
     state.firstLeaveTime = null; // 重置离开确认时间
     
-    if (!state.hasNotifiedGood) {
+    if (state.hasNotifiedBest) {
+      // Rebounded from Best to Good zone
+      state.hasNotifiedBest = false;
+      messages.push(buildMessage(`📈 [${rateRecord.currencyName}] 汇率小幅反弹`, '已从强烈区退回到适合区，仍可考虑分批换汇', false));
+      state.lastNotifiedRate = currentRate;
+      state.lastNotifiedTime = Date.now();
+    } else if (!state.hasNotifiedGood) {
       // First time entering good zone
       state.hasNotifiedGood = true;
       
@@ -748,14 +840,49 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
   if (messages.length > 0) {
     console.log(`[BOC Backend Background] Alert triggered for ${currencyCode}: ${messages[0].split('\n')[0]}`);
     try {
-      await sendTelegramMessages({
+      await sendTelegramNotifications({
         botToken,
         chatId,
         messages,
       });
+
+      // Save to local alert history
+      for (const msg of messages) {
+        await saveAlertLog({
+          type: 'target_hit',
+          message: msg,
+          currency: currencyCode
+        });
+      }
     } catch (err) {
       console.error(`[BOC Backend Background] Failed to send telegram alert for ${currencyCode}:`, err.message);
     }
+  }
+};
+
+const saveAlertLog = async (alert) => {
+  await ensureDataDirectory();
+  const logEntry = {
+    id: Math.random().toString(36).substring(2, 9),
+    timestamp: formatDateTime(),
+    read: false,
+    ...alert
+  };
+  
+  try {
+    let currentAlerts = [];
+    try {
+      const raw = await fs.readFile(ALERTS_FILE, 'utf8');
+      currentAlerts = JSON.parse(raw);
+    } catch (e) {}
+    
+    currentAlerts.unshift(logEntry);
+    // Keep last 200 alerts
+    if (currentAlerts.length > 200) currentAlerts = currentAlerts.slice(0, 200);
+    
+    await fs.writeFile(ALERTS_FILE, JSON.stringify(currentAlerts, null, 2), 'utf8');
+  } catch (error) {
+    console.error('[BOC Backend] Failed to save alert log:', error);
   }
 };
 

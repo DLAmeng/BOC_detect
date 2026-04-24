@@ -183,7 +183,20 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                                 onChange={handleChange}
                                 className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
                             />
-                            <p className="text-[10px] md:text-xs text-gray-500 mt-1.5 md:mt-2">用于动态百分位算法计算 Best/Good 区间的历史窗口（默认 14 天）。</p>
+                            <p className="text-[10px] md:text-xs text-gray-500 mt-1.5 md:mt-2">用于动态算法计算 Best/Good 区间的历史窗口。</p>
+                        </div>
+                        <div>
+                            <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">趋势对比跨度 (分钟)</label>
+                            <input
+                                type="number"
+                                name="trendComparisonMinutes"
+                                min="1"
+                                max="10080"
+                                value={localConfig.trendComparisonMinutes}
+                                onChange={handleChange}
+                                className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+                            />
+                            <p className="text-[10px] md:text-xs text-gray-500 mt-1.5 md:mt-2">用于计算卡片上涨跌幅度的参考时间跨度（默认 60 分钟）。</p>
                         </div>
                     </div>
                 </div>
