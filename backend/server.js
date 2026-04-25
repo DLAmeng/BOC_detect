@@ -432,10 +432,14 @@ const recordRateHistory = async (rateRecord) => {
   const currentHistory = store[rateRecord.currency] || (store[rateRecord.currency] = []);
   const lastRecord = currentHistory[currentHistory.length - 1];
 
+  const FORCE_RECORD_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+  const lastTimeMs = lastRecord?.fetchTimestampMs || 0;
+
   if (
     lastRecord &&
     lastRecord.pubTime === rateRecord.pubTime &&
-    lastRecord.rawSellingRate === rateRecord.rawSellingRate
+    lastRecord.rawSellingRate === rateRecord.rawSellingRate &&
+    (rateRecord.fetchTimestampMs - lastTimeMs) < FORCE_RECORD_INTERVAL_MS
   ) {
     return false;
   }
@@ -719,8 +723,6 @@ const calculateDynamicThresholds = async (currencyCode, windowDays = 14) => {
 };
 
 const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
-  if (!botToken || !chatId) return;
-
   const currencyCode = rateRecord.currency;
   const thresholds = await calculateDynamicThresholds(currencyCode, config.calculationWindowDays);
   if (!thresholds) return;
@@ -840,11 +842,13 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
   if (messages.length > 0) {
     console.log(`[BOC Backend Background] Alert triggered for ${currencyCode}: ${messages[0].split('\n')[0]}`);
     try {
-      await sendTelegramNotifications({
-        botToken,
-        chatId,
-        messages,
-      });
+      if (botToken && chatId) {
+        await sendTelegramMessages({
+          botToken,
+          chatId,
+          messages,
+        });
+      }
 
       // Save to local alert history
       for (const msg of messages) {
@@ -855,7 +859,7 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
         });
       }
     } catch (err) {
-      console.error(`[BOC Backend Background] Failed to send telegram alert for ${currencyCode}:`, err.message);
+      console.error(`[BOC Backend Background] Alert processing failed for ${currencyCode}:`, err.message);
     }
   }
 };
