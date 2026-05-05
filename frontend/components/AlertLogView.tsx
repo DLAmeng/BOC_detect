@@ -1,13 +1,15 @@
 import React from 'react';
 import { AlertLog } from '../types.ts';
 import { Bell, AlertTriangle, Info, CheckCircle2, Trash2 } from 'lucide-react';
+import { formatWithTimezone } from '../utils/time.ts';
 
 interface Props {
     alerts: AlertLog[];
     onClear: () => void;
+    timezone: string;
 }
 
-export const AlertLogView: React.FC<Props> = ({ alerts, onClear }) => {
+export const AlertLogView: React.FC<Props> = ({ alerts, onClear, timezone }) => {
     const getIcon = (type: string) => {
         switch (type) {
             case 'target_hit': return <CheckCircle2 className="w-4 h-4 md:w-5 md:h-5 text-green-500 mt-0.5 flex-shrink-0" />;
@@ -82,7 +84,9 @@ export const AlertLogView: React.FC<Props> = ({ alerts, onClear }) => {
                                         )}
                                     </div>
                                     <span className="text-[10px] md:text-xs text-gray-500 font-mono whitespace-nowrap ml-2">
-                                        {alert.timestamp.split(' ')[1]}
+                                        {alert.timestampMs 
+                                            ? formatWithTimezone(alert.timestampMs, timezone, 'HH:mm:ss')
+                                            : alert.timestamp.split(' ')[1]}
                                     </span>
                                 </div>
                                 <pre className="text-xs md:text-sm text-gray-300 font-mono whitespace-pre-wrap break-words leading-relaxed">

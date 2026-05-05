@@ -1,6 +1,7 @@
 import React from 'react';
 import { RateData } from '../types.ts';
 import { TrendingDown, TrendingUp, Minus, Clock, RefreshCw, LineChart } from 'lucide-react';
+import { formatWithTimezone } from '../utils/time.ts';
 
 interface Props {
     currentRate: RateData | null;
@@ -8,6 +9,7 @@ interface Props {
     currency: string;
     isActive?: boolean;
     onSelect?: () => void;
+    timezone: string;
 }
 
 export const DashboardCard: React.FC<Props> = ({
@@ -15,7 +17,8 @@ export const DashboardCard: React.FC<Props> = ({
     previousRate,
     currency,
     isActive = false,
-    onSelect
+    onSelect,
+    timezone
 }) => {
     const Wrapper = onSelect ? 'button' : 'div';
 
@@ -114,11 +117,17 @@ export const DashboardCard: React.FC<Props> = ({
             <div className="mt-4 md:mt-6 flex flex-col gap-1.5 md:gap-2 text-[10px] md:text-xs text-gray-500 bg-gray-950 p-2.5 md:p-3 rounded-lg border border-gray-800/50">
                 <div className="flex items-center justify-between">
                     <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> 发布时间:</span>
-                    <span className="font-mono text-gray-400">{currentRate.pubTime}</span>
+                    <span className="font-mono text-gray-400">
+                        {currentRate.pubTimestampMs 
+                            ? formatWithTimezone(currentRate.pubTimestampMs, timezone)
+                            : currentRate.pubTime}
+                    </span>
                 </div>
                 <div className="flex items-center justify-between">
                     <span className="flex items-center gap-1"><RefreshCw className="w-3 h-3" /> 抓取时间:</span>
-                    <span className="font-mono text-gray-400">{currentRate.fetchTime}</span>
+                    <span className="font-mono text-gray-400">
+                        {formatWithTimezone(currentRate.fetchTimestampMs, timezone)}
+                    </span>
                 </div>
             </div>
         </Wrapper>

@@ -4,6 +4,7 @@ import { DEFAULT_MONITORED_CURRENCIES } from './constants/currencies.ts';
 import { fetchDashboardData, clearBackendAlerts, fetchRateHistory, fetchMonitorConfig, saveMonitorConfig } from './utils/api.ts';
 import { DashboardCard } from './components/DashboardCard.tsx';
 import { RateChart } from './components/RateChart.tsx';
+import { CurrencyConverter } from './components/CurrencyConverter.tsx';
 import { AdminPage } from './components/AdminPage.tsx';
 import { AlertLogView } from './components/AlertLogView.tsx';
 import {
@@ -13,7 +14,8 @@ import {
     LayoutDashboard,
     Settings,
     Eye,
-    EyeOff
+    EyeOff,
+    Clock
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -29,6 +31,16 @@ const INITIAL_CONFIG: SystemConfig = {
 };
 
 const STORAGE_KEY = 'boc_monitor_config';
+const TZ_STORAGE_KEY = 'boc_monitor_timezone';
+
+const TIMEZONES = [
+    { value: 'auto', label: '🤖 自动 (本地)' },
+    { value: 'Asia/Shanghai', label: '🇨🇳 北京 (UTC+8)' },
+    { value: 'Australia/Sydney', label: '🇦🇺 悉尼 (UTC+10/11)' },
+    { value: 'America/New_York', label: '🇺🇸 纽约 (UTC-5/4)' },
+    { value: 'Europe/London', label: '🇬🇧 伦敦 (UTC+0/1)' },
+    { value: 'Asia/Tokyo', label: '🇯🇵 东京 (UTC+9)' }
+];
 
 const loadConfigFromStorage = (): SystemConfig => {
     try {
@@ -95,6 +107,9 @@ const getStatusClasses = (errorCount: number, totalCount: number) => {
 
 const App: React.FC = () => {
     const initialConfig = loadConfigFromStorage();
+    const [timezone, setTimezone] = useState<string>(() => {
+        return localStorage.getItem(TZ_STORAGE_KEY) || 'auto';
+    });
 
     const [state, setState] = useState<SystemState>({
         currentRates: syncRateMap({}, initialConfig.monitoredCurrencies),
@@ -155,6 +170,10 @@ const App: React.FC = () => {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state.config));
         } catch { /* ignore quota errors */ }
     }, [state.config]);
+
+    useEffect(() => {
+        localStorage.setItem(TZ_STORAGE_KEY, timezone);
+    }, [timezone]);
 
     useEffect(() => {
         const monitoredCurrencies = state.config.monitoredCurrencies;
@@ -356,14 +375,30 @@ const App: React.FC = () => {
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-2 sm:gap-3 w-full md:w-auto justify-between md:justify-end">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
+                        <div className="relative flex items-center bg-gray-900 border border-gray-700 rounded-full px-3 py-1.5 transition-colors focus-within:border-blue-500/50">
+                            <Clock className="w-3.5 h-3.5 text-gray-400 mr-2" />
+                            <select
+                                value={timezone}
+                                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setTimezone(e.target.value)}
+                                className="bg-transparent text-xs text-gray-300 focus:outline-none cursor-pointer appearance-none pr-4"
+                            >
+                                {TIMEZONES.map(tz => (
+                                    <option key={tz.value} value={tz.value} className="bg-gray-900 text-gray-300">
+                                        {tz.label}
+                                    </option>
+                                ))}
+                            </select>
+                            <div className="absolute right-3 pointer-events-none border-t-2 border-r-2 border-gray-500 w-1.5 h-1.5 rotate-[135deg] mt-[-3px]"></div>
+                        </div>
+
                         <div className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full border text-xs sm:text-sm ${statusClasses}`}>
                             {activeErrorCount === 0 ? (
                                 <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
                             ) : (
                                 <ServerCrash className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
                             )}
-                            <span className="font-medium truncate max-w-[170px] sm:max-w-none">{statusLabel}</span>
+                            <span className="font-medium truncate">{statusLabel}</span>
                         </div>
                     </div>
                 </div>
@@ -429,22 +464,37 @@ const App: React.FC = () => {
                                             currency={currencyConfig.currency}
                                             isActive={activeChartConfig?.currency === currencyConfig.currency}
                                             onSelect={() => setActiveChartCurrency(currencyConfig.currency)}
+                                            timezone={timezone}
                                         />
                                     ))}
                                 </div>
 
                                 {activeChartConfig && (
-                                    <RateChart
-                                        history={state.historyByCurrency[activeChartConfig.currency] ?? []}
-                                        currency={activeChartConfig.currency}
-                                        windowDays={state.config.calculationWindowDays}
-                                    />
+                                    <>
+                                        <CurrencyConverter
+                                            currentRate={state.currentRates[activeChartConfig.currency] ?? null}
+                                            previousRate={state.previousRates[activeChartConfig.currency] ?? null}
+                                            currency={activeChartConfig.currency}
+                                            trendComparisonMinutes={state.config.trendComparisonMinutes}
+                                        />
+                                        <RateChart
+                                            history={state.historyByCurrency[activeChartConfig.currency] ?? []}
+                                            currency={activeChartConfig.currency}
+                                            windowDays={state.config.calculationWindowDays}
+                                            targetRate={activeChartConfig.targetRate}
+                                            timezone={timezone}
+                                        />
+                                    </>
                                 )}
                             </div>
 
                             {showLogs && (
                                 <div className="lg:col-span-4 space-y-4 md:space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                                    <AlertLogView alerts={state.alerts} onClear={handleClearAlerts} />
+                                    <AlertLogView
+                                        alerts={state.alerts}
+                                        onClear={handleClearAlerts}
+                                        timezone={timezone}
+                                    />
                                 </div>
                             )}
                         </div>

@@ -154,3 +154,30 @@ export const sendTelegramNotifications = async ({
 
     return data;
 };
+
+export const sendWebhookNotification = async ({
+    messages,
+    webhookUrl
+}: {
+    messages: string[];
+    webhookUrl: string;
+}): Promise<{ success: boolean; sent?: number }> => {
+    const response = await fetch(`${getApiBaseUrl()}/notify/webhook`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            messages,
+            webhookUrl
+        })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+        throw new Error(data.error || data.details || `HTTP error! status: ${response.status}`);
+    }
+
+    return data;
+};

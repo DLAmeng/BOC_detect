@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { SystemConfig } from '../types.ts';
 import { AVAILABLE_CURRENCIES, buildCurrencyConfig } from '../constants/currencies.ts';
-import { sendTelegramNotifications } from '../utils/api.ts';
-import { Save, CheckSquare, Square, Bell, Target, Send } from 'lucide-react';
+import { sendTelegramNotifications, sendWebhookNotification } from '../utils/api.ts';
+import { Save, CheckSquare, Square, Bell, Target, Send, Globe } from 'lucide-react';
 
 interface Props {
     config: SystemConfig;
@@ -22,7 +22,9 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
     const [saveMessage, setSaveMessage] = useState('');
     const [validationMessage, setValidationMessage] = useState('');
     const [testSending, setTestSending] = useState(false);
+    const [webhookTestSending, setWebhookTestSending] = useState(false);
     const [testResult, setTestResult] = useState<{ type: 'success' | 'warn' | 'error'; text: string } | null>(null);
+    const [webhookTestResult, setWebhookTestResult] = useState<{ type: 'success' | 'warn' | 'error'; text: string } | null>(null);
 
     useEffect(() => {
         setLocalConfig(config);
@@ -63,6 +65,16 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
         setValidationMessage('');
     };
 
+    const handleTargetRateChange = (currencyCode: string, value: string) => {
+        setLocalConfig((prev) => ({
+            ...prev,
+            monitoredCurrencies: prev.monitoredCurrencies.map((item) =>
+                item.currency === currencyCode ? { ...item, targetRate: value === '' ? undefined : Number(value) } : item
+            )
+        }));
+        setIsDirty(true);
+        setSaveMessage('');
+    };
 
     const handleTestTelegram = async () => {
         setTestSending(true);
@@ -84,6 +96,30 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
             setTestResult({ type: 'error', text: error?.message || '发送失败' });
         } finally {
             setTestSending(false);
+        }
+    };
+
+    const handleTestWebhook = async () => {
+        if (!localConfig.webhookUrl) {
+            setWebhookTestResult({ type: 'warn', text: '请先输入 Webhook URL。' });
+            return;
+        }
+        setWebhookTestSending(true);
+        setWebhookTestResult(null);
+        try {
+            const result = await sendWebhookNotification({
+                messages: ['[BOC 测试] Webhook 连接正常 ✓'],
+                webhookUrl: localConfig.webhookUrl
+            });
+            if (result.success) {
+                setWebhookTestResult({ type: 'success', text: '测试消息已发送！' });
+            } else {
+                setWebhookTestResult({ type: 'error', text: '发送失败' });
+            }
+        } catch (error: any) {
+            setWebhookTestResult({ type: 'error', text: error?.message || '发送失败' });
+        } finally {
+            setWebhookTestSending(false);
         }
     };
 
@@ -128,30 +164,50 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                         <label className="block text-xs md:text-sm font-medium text-gray-400 mb-3">选择要同时监控的币种</label>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                             {AVAILABLE_CURRENCIES.map((currency) => {
-                                const selected = localConfig.monitoredCurrencies.some((item) => item.currency === currency.code);
+                                const config = localConfig.monitoredCurrencies.find((item) => item.currency === currency.code);
+                                const selected = !!config;
 
                                 return (
-                                    <button
-                                        key={currency.code}
-                                        type="button"
-                                        onClick={() => handleToggleCurrency(currency.code)}
-                                        className={`rounded-xl border p-4 text-left transition-colors ${
-                                            selected
-                                                ? 'bg-blue-500/10 border-blue-500/40 text-blue-100'
-                                                : 'bg-gray-950 border-gray-800 text-gray-300 hover:border-gray-700'
-                                        }`}
-                                    >
-                                        <div className="flex items-center justify-between gap-3">
-                                            <div>
-                                                <p className="text-sm font-medium">{currency.name}</p>
+                                    <div key={currency.code} className="flex flex-col gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleToggleCurrency(currency.code)}
+                                            className={`rounded-xl border p-4 text-left transition-colors ${
+                                                selected
+                                                    ? 'bg-blue-500/10 border-blue-500/40 text-blue-100'
+                                                    : 'bg-gray-950 border-gray-800 text-gray-300 hover:border-gray-700'
+                                            }`}
+                                        >
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <p className="text-sm font-medium">{currency.name}</p>
+                                                </div>
+                                                {selected ? (
+                                                    <CheckSquare className="w-5 h-5 text-blue-400 flex-shrink-0" />
+                                                ) : (
+                                                    <Square className="w-5 h-5 text-gray-600 flex-shrink-0" />
+                                                )}
                                             </div>
-                                            {selected ? (
-                                                <CheckSquare className="w-5 h-5 text-blue-400 flex-shrink-0" />
-                                            ) : (
-                                                <Square className="w-5 h-5 text-gray-600 flex-shrink-0" />
-                                            )}
-                                        </div>
-                                    </button>
+                                        </button>
+                                        
+                                        {selected && (
+                                            <div className="px-1 animate-in slide-in-from-top-2 duration-200">
+                                                <div className="relative">
+                                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                                        <Target className="h-3.5 w-3.5 text-gray-500" />
+                                                    </div>
+                                                    <input
+                                                        type="number"
+                                                        step="0.0001"
+                                                        placeholder="目标价 (如 4.65)"
+                                                        value={config.targetRate || ''}
+                                                        onChange={(e) => handleTargetRateChange(currency.code, e.target.value)}
+                                                        className="block w-full pl-9 pr-3 py-1.5 bg-gray-950 border border-gray-700 rounded-lg text-xs text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
                                 );
                             })}
                         </div>
@@ -203,65 +259,126 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
             </div>
 
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 md:p-6 shadow-sm">
-                <h3 className="text-base md:text-lg font-semibold text-white flex items-center gap-2 mb-4 md:mb-6 pb-3 md:pb-4 border-b border-gray-800">
-                    <Bell className="w-4 h-4 md:w-5 md:h-5 text-purple-400" />
-                    通知设置 (Telegram)
-                </h3>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 md:mb-6 pb-3 md:pb-4 border-b border-gray-800">
+                    <h3 className="text-base md:text-lg font-semibold text-white flex items-center gap-2">
+                        <Bell className="w-4 h-4 md:w-5 md:h-5 text-purple-400" />
+                        通知推送设置
+                    </h3>
+                    <p className="text-[10px] md:text-xs text-gray-500 italic">系统触发告警时将自动通过以下渠道推送</p>
+                </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
-                    <div>
-                        <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">Telegram 机器人 Token</label>
-                        <input
-                            type="password"
-                            name="telegramBotToken"
-                            value={localConfig.telegramBotToken}
-                            onChange={handleChange}
-                            placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
-                            className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 transition-colors"
-                        />
-                        <p className="text-[10px] md:text-xs text-gray-500 mt-1.5 md:mt-2">用于发送多币种到价提醒；若后端已配置环境变量，这里可以留空。</p>
+                <div className="mb-8 p-4 bg-gray-950 rounded-xl border border-gray-800/50">
+                    <div className="flex items-center gap-2 mb-4">
+                        <div className="w-6 h-6 rounded bg-blue-600/20 flex items-center justify-center">
+                            <Globe className="w-3.5 h-3.5 text-blue-400" />
+                        </div>
+                        <h4 className="text-sm font-medium text-blue-100">通用 Webhook (推荐国内使用)</h4>
                     </div>
-                    <div>
-                        <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">Telegram 聊天 ID</label>
-                        <input
-                            type="text"
-                            name="telegramChatId"
-                            value={localConfig.telegramChatId}
-                            onChange={handleChange}
-                            placeholder="@mychannel 或 123456789"
-                            className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 transition-colors"
-                        />
-                        <p className="text-[10px] md:text-xs text-gray-500 mt-1.5 md:mt-2">多个币种在同一轮触发时会分别发送对应消息；异常通知仍会去重。</p>
+                    
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1.5">Webhook URL</label>
+                            <input
+                                type="text"
+                                name="webhookUrl"
+                                value={localConfig.webhookUrl}
+                                onChange={handleChange}
+                                placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."
+                                className="w-full bg-gray-900 border border-gray-700 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
+                            />
+                            <p className="text-[10px] text-gray-500 mt-1.5">
+                                支持钉钉、飞书、企业微信机器人或 Bark 等。系统将以 POST JSON 格式发送内容。
+                            </p>
+                        </div>
+                        
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                            <button
+                                type="button"
+                                onClick={handleTestWebhook}
+                                disabled={webhookTestSending}
+                                className={`flex items-center justify-center gap-2 px-4 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+                                    webhookTestSending
+                                        ? 'bg-gray-800 text-gray-500 border-gray-800'
+                                        : 'bg-blue-500/10 text-blue-300 border-blue-500/30 hover:bg-blue-500/20'
+                                }`}
+                            >
+                                <Send className="w-3 h-3" />
+                                {webhookTestSending ? '发送中…' : '发送测试 Webhook'}
+                            </button>
+                            {webhookTestResult && (
+                                <span className={`text-xs font-medium ${
+                                    webhookTestResult.type === 'success' ? 'text-green-400' : webhookTestResult.type === 'warn' ? 'text-yellow-300' : 'text-red-400'
+                                }`}>
+                                    {webhookTestResult.text}
+                                </span>
+                            )}
+                        </div>
                     </div>
                 </div>
 
-                <div className="mt-4 md:mt-5 flex flex-col sm:flex-row sm:items-center gap-3">
-                    <button
-                        type="button"
-                        onClick={handleTestTelegram}
-                        disabled={testSending}
-                        className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition-colors border ${
-                            testSending
-                                ? 'bg-gray-800 text-gray-500 border-gray-800 cursor-not-allowed'
-                                : 'bg-purple-500/10 text-purple-300 border-purple-500/30 hover:bg-purple-500/20'
-                        }`}
-                    >
-                        <Send className="w-3.5 h-3.5 md:w-4 md:h-4" />
-                        {testSending ? '发送中…' : '发送测试消息'}
-                    </button>
-                    {testResult && (
-                        <span
-                            className={`text-xs md:text-sm font-medium ${
-                                testResult.type === 'success'
-                                    ? 'text-green-400'
-                                    : testResult.type === 'warn'
-                                      ? 'text-yellow-300'
-                                      : 'text-red-400'
+                <div className="p-4 bg-gray-950 rounded-xl border border-gray-800/50">
+                    <div className="flex items-center gap-2 mb-4">
+                        <div className="w-6 h-6 rounded bg-purple-600/20 flex items-center justify-center">
+                            <Send className="w-3.5 h-3.5 text-purple-400 rotate-[320deg]" />
+                        </div>
+                        <h4 className="text-sm font-medium text-purple-100">Telegram 机器人</h4>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+                        <div>
+                            <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">Telegram 机器人 Token</label>
+                            <input
+                                type="password"
+                                name="telegramBotToken"
+                                value={localConfig.telegramBotToken}
+                                onChange={handleChange}
+                                placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+                                className="w-full bg-gray-900 border border-gray-700 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
+                            />
+                            <p className="text-[10px] text-gray-500 mt-1.5">用于发送多币种到价提醒；若后端已配置环境变量，这里可以留空。</p>
+                        </div>
+                        <div>
+                            <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">Telegram 聊天 ID</label>
+                            <input
+                                type="text"
+                                name="telegramChatId"
+                                value={localConfig.telegramChatId}
+                                onChange={handleChange}
+                                placeholder="@mychannel 或 123456789"
+                                className="w-full bg-gray-900 border border-gray-700 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
+                            />
+                            <p className="text-[10px] text-gray-500 mt-1.5">多个币种在同一轮触发时会分别发送对应消息；异常通知仍会去重。</p>
+                        </div>
+                    </div>
+
+                    <div className="mt-4 md:mt-5 flex flex-col sm:flex-row sm:items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={handleTestTelegram}
+                            disabled={testSending}
+                            className={`flex items-center justify-center gap-2 px-4 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+                                testSending
+                                    ? 'bg-gray-800 text-gray-500 border-gray-800 cursor-not-allowed'
+                                    : 'bg-purple-500/10 text-purple-300 border-purple-500/30 hover:bg-purple-500/20'
                             }`}
                         >
-                            {testResult.text}
-                        </span>
-                    )}
+                            <Send className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                            {testSending ? '发送中…' : '发送测试消息'}
+                        </button>
+                        {testResult && (
+                            <span
+                                className={`text-xs md:text-sm font-medium ${
+                                    testResult.type === 'success'
+                                        ? 'text-green-400'
+                                        : testResult.type === 'warn'
+                                          ? 'text-yellow-300'
+                                          : 'text-red-400'
+                                }`}
+                            >
+                                {testResult.text}
+                            </span>
+                        )}
+                    </div>
                 </div>
             </div>
 

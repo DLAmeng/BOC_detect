@@ -181,9 +181,11 @@ const saveMonitorConfig = async (newConfig) => {
           const code = item.currency.toUpperCase();
           if (CURRENCY_MAP[code] && !seen.has(code)) {
             seen.add(code);
-            validCurrencies.push({
-              currency: code
-            });
+            const currencyConfig = { currency: code };
+            if (item.targetRate != null && !Number.isNaN(Number(item.targetRate))) {
+              currencyConfig.targetRate = Number(item.targetRate);
+            }
+            validCurrencies.push(currencyConfig);
           }
         }
       }
@@ -364,6 +366,7 @@ const fetchRateRecord = async (currencyCode) => {
     return {
       calculatedRate: Number(calculatedRate.toFixed(4)),
       pubTime: formatDateTime(pubDateObj),
+      pubTimestampMs: pubDateObj.getTime(),
     };
   };
 
@@ -412,6 +415,7 @@ const fetchRateRecord = async (currencyCode) => {
     rawSellingRate: Number((yahooData.calculatedRate * 100).toFixed(2)), // Main raw rate derived from primary source
     calculatedRate: yahooData.calculatedRate, // Yahoo is primary
     pubTime: yahooData.pubTime,
+    pubTimestampMs: yahooData.pubTimestampMs,
     fetchTime,
     fetchTimestampMs,
     source: 'Yahoo + BOC',
@@ -472,6 +476,45 @@ const sendTelegramMessages = async ({ botToken, chatId, messages }) => {
       }
     );
     sentCount += 1;
+  }
+
+  return sentCount;
+};
+
+const sendWebhookMessages = async ({ webhookUrl, messages }) => {
+  let sentCount = 0;
+
+  for (const text of messages) {
+    try {
+      let payload = { text };
+
+      // Intelligent formatting based on URL
+      if (webhookUrl.includes('qyapi.weixin.qq.com') || webhookUrl.includes('oapi.dingtalk.com')) {
+        // WeCom or DingTalk
+        payload = {
+          msgtype: 'text',
+          text: { content: text }
+        };
+      } else if (webhookUrl.includes('open.feishu.cn')) {
+        // Feishu
+        payload = {
+          msg_type: 'text',
+          content: { text }
+        };
+      } else if (webhookUrl.includes('api.day.app')) {
+        // Bark
+        payload = {
+          title: 'BOC 汇率提醒',
+          body: text,
+          group: 'CurrencyMonitor'
+        };
+      }
+
+      await axios.post(webhookUrl, payload, { timeout: REQUEST_TIMEOUT_MS });
+      sentCount += 1;
+    } catch (err) {
+      console.error(`[BOC Backend] Webhook delivery failed:`, err.message);
+    }
   }
 
   return sentCount;
@@ -724,14 +767,15 @@ const calculateDynamicThresholds = async (currencyCode, windowDays = 14) => {
 
 const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
   const currencyCode = rateRecord.currency;
+  const currencyConfig = config.monitoredCurrencies?.find(c => c.currency === currencyCode);
+  const targetRate = currencyConfig?.targetRate;
+
   const thresholds = await calculateDynamicThresholds(currencyCode, config.calculationWindowDays);
   if (!thresholds) return;
 
   const { bestZoneUpper, goodZoneUpper, buffer, range } = thresholds;
   const currentRate = rateRecord.calculatedRate;
   const bocRate = rateRecord.bocRate;
-  const leaveThreshold = goodZoneUpper + buffer;
-  const minDropToNotify = range * 0.02; // 至少跌幅达到波动范围的 2% 才重复通知，防抖
   
   const NOTIFY_COOLDOWN_MS = 60 * 60 * 1000; // 同级别通知冷却 1 小时
   const LEAVE_CONFIRM_MS = 30 * 60 * 1000;   // 离开区间需持续确认 30 分钟
@@ -742,6 +786,7 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
     global.alertStateFlags[currencyCode] = {
       hasNotifiedGood: false,
       hasNotifiedBest: false,
+      hasNotifiedTarget: false,
       lastNotifiedRate: null,
       lastNotifiedTime: null,
       firstLeaveTime: null
@@ -773,24 +818,40 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
     return msg;
   };
 
-  if (currentRate <= bestZoneUpper) {
+  // 1. Check Custom Target Rate (Highest Priority) with Hysteresis
+  // If already notified, only reset flag if it rises above target + buffer
+  const effectiveTargetRate = state.hasNotifiedTarget ? (targetRate + buffer) : targetRate;
+  if (targetRate && currentRate <= effectiveTargetRate) {
+    if (!state.hasNotifiedTarget) {
+      state.hasNotifiedTarget = true;
+      messages.push(buildMessage(`🎯 [${rateRecord.currencyName}] 达到自定义目标买入价`, `当前汇率已跌破您设定的目标价 ¥${targetRate.toFixed(4)}，适合优先换汇`, false));
+      // Target rate notification is independent and has no mandatory cooldown
+    }
+  } else if (targetRate && currentRate > targetRate + buffer) {
+    state.hasNotifiedTarget = false;
+  }
+
+  // 2. Dynamic Thresholds with Hysteresis
+  const effectiveBestZoneUpper = state.hasNotifiedBest ? (bestZoneUpper + buffer) : bestZoneUpper;
+  const effectiveGoodZoneUpper = state.hasNotifiedGood ? (goodZoneUpper + buffer) : goodZoneUpper;
+
+  if (currentRate <= effectiveBestZoneUpper) {
     state.firstLeaveTime = null; // 重置离开确认时间
     
-    if (!state.hasNotifiedBest) {
-      // First time entering best zone
+    if (!state.hasNotifiedBest || canNotify()) {
       state.hasNotifiedBest = true;
       state.hasNotifiedGood = true;
       
       messages.push(buildMessage(`📉 [${rateRecord.currencyName}] 进入强烈换汇区`, '适合优先换汇', false));
       state.lastNotifiedRate = currentRate;
       state.lastNotifiedTime = Date.now();
-    } else if (state.lastNotifiedRate && (state.lastNotifiedRate - currentRate) >= minDropToNotify && canNotify()) {
-      // Still in best zone, significantly lower, and cooldown passed
+    } else if (state.lastNotifiedRate && (state.lastNotifiedRate - currentRate) >= (range * 0.02) && canNotify()) {
+      // Significantly lower than last notified rate in the same zone
       messages.push(buildMessage(`📉 [${rateRecord.currencyName}] 强烈换汇区内发现更低汇率`, '适合优先换汇', true));
       state.lastNotifiedRate = currentRate;
       state.lastNotifiedTime = Date.now();
     }
-  } else if (currentRate <= goodZoneUpper) {
+  } else if (currentRate <= effectiveGoodZoneUpper) {
     state.firstLeaveTime = null; // 重置离开确认时间
     
     if (state.hasNotifiedBest) {
@@ -799,20 +860,18 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
       messages.push(buildMessage(`📈 [${rateRecord.currencyName}] 汇率小幅反弹`, '已从强烈区退回到适合区，仍可考虑分批换汇', false));
       state.lastNotifiedRate = currentRate;
       state.lastNotifiedTime = Date.now();
-    } else if (!state.hasNotifiedGood) {
-      // First time entering good zone
+    } else if (!state.hasNotifiedGood || canNotify()) {
       state.hasNotifiedGood = true;
       
       messages.push(buildMessage(`✅ [${rateRecord.currencyName}] 进入适合换汇区`, '可考虑分批换汇', false));
       state.lastNotifiedRate = currentRate;
       state.lastNotifiedTime = Date.now();
-    } else if (state.lastNotifiedRate && (state.lastNotifiedRate - currentRate) >= minDropToNotify && canNotify()) {
-      // Still in good zone, significantly lower, and cooldown passed
+    } else if (state.lastNotifiedRate && (state.lastNotifiedRate - currentRate) >= (range * 0.02) && canNotify()) {
       messages.push(buildMessage(`✅ [${rateRecord.currencyName}] 适合换汇区内发现更低汇率`, '可考虑分批换汇', true));
       state.lastNotifiedRate = currentRate;
       state.lastNotifiedTime = Date.now();
     }
-  } else if (currentRate > leaveThreshold) {
+  } else if (currentRate > effectiveGoodZoneUpper + buffer) {
     if (state.hasNotifiedGood || state.hasNotifiedBest) {
       // 记录初次离开时间
       if (!state.firstLeaveTime) {
@@ -850,6 +909,13 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
         });
       }
 
+      if (config.webhookUrl) {
+        await sendWebhookMessages({
+          webhookUrl: config.webhookUrl,
+          messages,
+        });
+      }
+
       // Save to local alert history
       for (const msg of messages) {
         await saveAlertLog({
@@ -869,6 +935,7 @@ const saveAlertLog = async (alert) => {
   const logEntry = {
     id: Math.random().toString(36).substring(2, 9),
     timestamp: formatDateTime(),
+    timestampMs: Date.now(),
     read: false,
     ...alert
   };
@@ -973,6 +1040,37 @@ const refreshYahooHistoryOnStartup = async () => {
     startupHistoryRefreshPromise = null;
   }
 };
+
+app.post('/api/notify/webhook', async (req, res) => {
+  const webhookUrl = `${req.body?.webhookUrl || ''}`.trim();
+  const messages = Array.isArray(req.body?.messages)
+    ? req.body.messages.map((message) => `${message}`.trim()).filter(Boolean)
+    : [`${req.body?.message || ''}`.trim()].filter(Boolean);
+
+  if (!messages.length) {
+    return res.status(400).json({ success: false, error: '消息内容不能为空' });
+  }
+
+  if (!webhookUrl) {
+    return res.status(400).json({ success: false, error: 'Webhook URL 不能为空' });
+  }
+
+  try {
+    const sent = await sendWebhookMessages({
+      webhookUrl,
+      messages: messages.slice(0, 10),
+    });
+
+    return res.json({ success: true, sent });
+  } catch (error) {
+    console.error('[BOC Backend] Failed to send Webhook message:', error.message);
+    return res.status(502).json({
+      success: false,
+      error: 'Webhook 发送失败',
+      details: error.message,
+    });
+  }
+});
 
 app.post('/api/notify/telegram', async (req, res) => {
   const botToken = `${req.body?.botToken || TELEGRAM_BOT_TOKEN}`.trim();

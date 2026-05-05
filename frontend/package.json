@@ -9,14 +9,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "date-fns": "latest",
+    "date-fns-tz": "^3.2.0",
+    "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "lucide-react": "latest",
-    "recharts": "latest",
-    "date-fns": "latest"
+    "recharts": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "latest",
     "typescript": "latest",
     "vite": "latest"

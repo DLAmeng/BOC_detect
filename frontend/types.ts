@@ -6,6 +6,7 @@ export interface RateData {
     bocRate?: number;       // The synchronized BOC rate (e.g. 4.6825)
     bocRawRate?: number;    // The synchronized BOC raw rate (e.g. 468.25)
     pubTime: string;
+    pubTimestampMs?: number;
     fetchTime: string;
     fetchTimestampMs: number;
     source?: string;
@@ -19,11 +20,13 @@ export interface AlertLog {
     type: AlertType;
     message: string;
     timestamp: string;
+    timestampMs?: number;
     read: boolean;
 }
 
 export interface MonitoredCurrencyConfig {
     currency: string;
+    targetRate?: number;
 }
 
 export interface SystemConfig {

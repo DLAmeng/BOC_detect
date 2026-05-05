@@ -3,7 +3,8 @@ import { RateData } from '../types.ts';
 import { fetchRateHistory } from '../utils/api.ts';
 import { calculateThresholdsWithMeta } from '../utils/rateStats.ts';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
-import { Info, AlertCircle } from 'lucide-react';
+import { Info, AlertCircle, Download } from 'lucide-react';
+import { formatWithTimezone } from '../utils/time.ts';
 
 type TimeRange = '24h' | '7d' | '14d' | '30d' | '3m' | '6m' | '1y';
 
@@ -11,6 +12,8 @@ interface Props {
     history: RateData[];
     currency: string;
     windowDays?: number;
+    targetRate?: number;
+    timezone: string;
 }
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -83,7 +86,7 @@ const resampleData = (data: RateData[], range: TimeRange): RateData[] => {
         });
 };
 
-export const RateChart = ({ history, currency, windowDays = 14 }: Props) => {
+export const RateChart = ({ history, currency, windowDays = 14, targetRate, timezone }: Props) => {
     const [timeRange, setTimeRange] = useState<TimeRange>('7d');
     const [persistedHistory, setPersistedHistory] = useState<RateData[]>([]);
     const [historyError, setHistoryError] = useState<string | null>(null);
@@ -133,6 +136,34 @@ export const RateChart = ({ history, currency, windowDays = 14 }: Props) => {
     // Use type assertion to satisfy TS indexing requirements
     const rangeWindow = RANGE_WINDOWS[timeRange as TimeRange];
     const rawDisplayData = mergedHistory.filter((item) => now - item.fetchTimestampMs <= rangeWindow);
+
+    const handleExportCSV = () => {
+        if (!rawDisplayData.length) return;
+
+        const headers = ['Fetch Time', 'Timestamp MS', 'Currency', 'Yahoo Rate', 'BOC Rate', 'Source'];
+        const rows = rawDisplayData.map(item => [
+            `"${item.fetchTime}"`,
+            item.fetchTimestampMs,
+            `"${currency}"`,
+            item.calculatedRate,
+            item.bocRate || '',
+            `"${item.source || ''}"`
+        ]);
+
+        const csvContent = [
+            headers.join(','),
+            ...rows.map(row => row.join(','))
+        ].join('\n');
+
+        const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', `rates_${currency}_${timeRange}_${new Date().toISOString().split('T')[0]}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
     
     // 应用重采样逻辑平滑曲线
     const displayData = resampleData(rawDisplayData, timeRange);
@@ -229,6 +260,9 @@ export const RateChart = ({ history, currency, windowDays = 14 }: Props) => {
     }
     
     const allValues = [...rates, ...extraPoints];
+    if (targetRate) {
+        allValues.push(targetRate);
+    }
     const dataMin = allValues.length > 0 ? Math.min(...allValues) : 0;
     const dataMax = allValues.length > 0 ? Math.max(...allValues) : 1;
     const diff = dataMax - dataMin;
@@ -261,20 +295,32 @@ export const RateChart = ({ history, currency, windowDays = 14 }: Props) => {
                     </div>
                     {historyError && <p className="text-[10px] md:text-xs text-red-400 mt-1">历史数据加载失败：{historyError}</p>}
                 </div>
-                <div className="flex flex-wrap bg-gray-950 rounded-lg p-1 border border-gray-800 gap-1 w-full sm:w-auto">
-                    {RANGES.map((range) => (
-                        <button
-                            key={range.value}
-                            onClick={() => setTimeRange(range.value)}
-                            className={`flex-1 sm:flex-none px-2 py-1 md:px-3 md:py-1.5 text-[10px] md:text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                                timeRange === range.value
-                                    ? 'bg-blue-600 text-white shadow-sm'
-                                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
-                            }`}
-                        >
-                            {range.label}
-                        </button>
-                    ))}
+                <div className="flex items-center gap-2 w-full sm:w-auto overflow-hidden">
+                    <div className="flex-grow sm:flex-grow-0 flex flex-nowrap bg-gray-950 rounded-lg p-1 border border-gray-800 gap-1 overflow-x-auto no-scrollbar">
+                        {RANGES.map((range) => (
+                            <button
+                                key={range.value}
+                                onClick={() => setTimeRange(range.value)}
+                                className={`flex-1 sm:flex-none px-2 py-1 md:px-3 md:py-1.5 text-[10px] md:text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                                    timeRange === range.value
+                                        ? 'bg-blue-600 text-white shadow-sm'
+                                        : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                                }`}
+                            >
+                                {range.label}
+                            </button>
+                        ))}
+                    </div>
+                    
+                    <button
+                        onClick={handleExportCSV}
+                        title="导出当前范围原始数据为 CSV"
+                        className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 md:py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg border border-gray-700 transition-colors text-[10px] md:text-xs font-medium"
+                    >
+                        <Download className="w-3 h-3" />
+                        <span className="hidden sm:inline text-[10px] md:text-xs">导出数据</span>
+                        <span className="sm:hidden text-[10px]">导出</span>
+                    </button>
                 </div>
             </div>
 
@@ -301,28 +347,10 @@ export const RateChart = ({ history, currency, windowDays = 14 }: Props) => {
                             tickMargin={8} 
                             minTickGap={30}
                             tickFormatter={(unixTime) => {
-                                const date = new Date(unixTime);
-                                const now = new Date();
-                                const isCurrentYear = date.getFullYear() === now.getFullYear();
-                                const isToday = date.getDate() === now.getDate() && date.getMonth() === now.getMonth() && isCurrentYear;
-                        
-                                const month = (date.getMonth() + 1).toString().padStart(2, '0');
-                                const day = date.getDate().toString().padStart(2, '0');
-                                const hours = date.getHours().toString().padStart(2, '0');
-                                const minutes = date.getMinutes().toString().padStart(2, '0');
-
                                 if (timeRange === '24h') {
-                                    if (isToday) {
-                                        return `${hours}:${minutes}`;
-                                    } else {
-                                        return `${month}-${day} ${hours}:${minutes}`;
-                                    }
+                                    return formatWithTimezone(unixTime, timezone, 'HH:mm');
                                 } else {
-                                    if (isCurrentYear) {
-                                        return `${month}-${day}`;
-                                    } else {
-                                        return `${date.getFullYear()}-${month}-${day}`;
-                                    }
+                                    return formatWithTimezone(unixTime, timezone, 'MM-dd');
                                 }
                             }}
                         />
@@ -339,7 +367,8 @@ export const RateChart = ({ history, currency, windowDays = 14 }: Props) => {
                             labelStyle={{ color: '#9ca3af', marginBottom: '4px', fontSize: '10px' }}
                             labelFormatter={(label, payload) => {
                                 if (payload && payload.length > 0) {
-                                    return payload[0].payload.fullTime;
+                                    const item = payload[0].payload;
+                                    return formatWithTimezone(item.fetchTimestampMs, timezone, 'yyyy-MM-dd HH:mm:ss');
                                 }
                                 return label;
                             }}
@@ -361,6 +390,20 @@ export const RateChart = ({ history, currency, windowDays = 14 }: Props) => {
                                     strokeDasharray="4 4"
                                 />
                             </>
+                        )}
+                        {targetRate && (
+                            <ReferenceLine
+                                y={targetRate}
+                                stroke="#f87171"
+                                strokeWidth={2}
+                                label={{ 
+                                    value: '目标价', 
+                                    position: 'left', 
+                                    fill: '#f87171',
+                                    fontSize: 10,
+                                    fontWeight: 'bold'
+                                }}
+                            />
                         )}
                         <Line
                             name="rate"
@@ -415,6 +458,15 @@ export const RateChart = ({ history, currency, windowDays = 14 }: Props) => {
                             </div>
                         </div>
                     </>
+                )}
+                {targetRate && (
+                    <div className="flex items-center gap-2">
+                        <div className="w-4 h-0.5 bg-[#f87171]"></div>
+                        <div className="flex flex-col">
+                            <span className="text-[10px] md:text-xs text-[#f87171] font-bold">🎯 目标买入价</span>
+                            <span className="text-[9px] text-gray-600 font-mono">={targetRate.toFixed(4)}</span>
+                        </div>
+                    </div>
                 )}
             </div>
         </div>
