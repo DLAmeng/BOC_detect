@@ -19,6 +19,15 @@ export const CurrencyConverter: React.FC<Props> = ({
     const [baseCurrency, setBaseCurrency] = useState<'FOREIGN' | 'RMB'>('FOREIGN');
     const [rateSource, setRateSource] = useState<'boc' | 'yahoo'>('boc');
 
+    const handleAmountChange = (val: string, currencyType: 'FOREIGN' | 'RMB') => {
+        // Only allow numbers and at most one decimal point
+        const sanitized = val.replace(/[^0-9.]/g, '');
+        if (sanitized.split('.').length > 2) return;
+        
+        setBaseAmount(sanitized);
+        setBaseCurrency(currencyType);
+    };
+
     if (!currentRate) return null;
 
     const actualRateSource = (rateSource === 'boc' && currentRate.bocRate) ? 'boc' : 'yahoo';
@@ -109,12 +118,10 @@ export const CurrencyConverter: React.FC<Props> = ({
                     <label className="block text-xs text-gray-500 mb-1.5 ml-1">我想买入的外币数量</label>
                     <div className="relative">
                         <input
-                            type="number"
+                            type="text"
+                            inputMode="decimal"
                             value={foreignStr}
-                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                                setBaseAmount(e.target.value);
-                                setBaseCurrency('FOREIGN');
-                            }}
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleAmountChange(e.target.value, 'FOREIGN')}
                             className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2.5 px-4 text-white focus:outline-none focus:border-blue-500 transition-colors pl-4 pr-12 font-bold"
                             placeholder="0.00"
                         />
@@ -132,12 +139,10 @@ export const CurrencyConverter: React.FC<Props> = ({
                         <div className="relative">
                             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-lg font-bold">¥</span>
                             <input
-                                type="number"
+                                type="text"
+                                inputMode="decimal"
                                 value={rmbStr}
-                                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                                    setBaseAmount(e.target.value);
-                                    setBaseCurrency('RMB');
-                                }}
+                                onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleAmountChange(e.target.value, 'RMB')}
                                 className="w-full bg-gray-900 border border-gray-700 rounded-lg py-2.5 px-3 text-white focus:outline-none focus:border-blue-500 transition-colors pl-8 text-xl md:text-2xl font-bold tracking-tight"
                                 placeholder="0.00"
                             />
