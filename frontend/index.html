@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -28,6 +30,12 @@
             background-color: #030712;
             color: #f3f4f6;
             font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+            /* Prevent bouncing on some browsers if necessary, but we'll handle pull-to-refresh manually */
+            overscroll-behavior-y: contain;
+        }
+        /* Prevent iOS Zoom on input focus */
+        input, textarea, select {
+            font-size: 16px !important;
         }
         /* Custom scrollbar for logs */
         ::-webkit-scrollbar {

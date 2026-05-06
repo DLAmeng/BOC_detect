@@ -111,6 +111,12 @@ const App: React.FC = () => {
         return localStorage.getItem(TZ_STORAGE_KEY) || 'auto';
     });
 
+    // Pull-to-refresh state
+    const [touchStart, setTouchStart] = useState<number | null>(null);
+    const [pullDistance, setPullDistance] = useState(0);
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const PULL_THRESHOLD = 80;
+
     const [state, setState] = useState<SystemState>({
         currentRates: syncRateMap({}, initialConfig.monitoredCurrencies),
         previousRates: syncRateMap({}, initialConfig.monitoredCurrencies),
@@ -342,6 +348,38 @@ const App: React.FC = () => {
         }
     };
 
+    const handleTouchStart = (e: React.TouchEvent) => {
+        if (window.scrollY === 0) {
+            setTouchStart(e.touches[0].clientY);
+        }
+    };
+
+    const handleTouchMove = (e: React.TouchEvent) => {
+        if (touchStart !== null && window.scrollY === 0) {
+            const currentTouch = e.touches[0].clientY;
+            const distance = currentTouch - touchStart;
+            if (distance > 0) {
+                setPullDistance(Math.min(distance, PULL_THRESHOLD + 20));
+                // Prevent scrolling when pulling
+                if (distance > 10 && e.cancelable) {
+                    e.preventDefault();
+                }
+            }
+        }
+    };
+
+    const handleTouchEnd = () => {
+        if (pullDistance >= PULL_THRESHOLD) {
+            setIsRefreshing(true);
+            // Wait for a small delay to show the refresh status then reload
+            setTimeout(() => {
+                window.location.reload();
+            }, 500);
+        }
+        setTouchStart(null);
+        setPullDistance(0);
+    };
+
     const monitoredCurrencies = state.config.monitoredCurrencies;
     const activeChartConfig =
         monitoredCurrencies.find((item: MonitoredCurrencyConfig) => item.currency === activeChartCurrency) ?? monitoredCurrencies[0];
@@ -356,7 +394,25 @@ const App: React.FC = () => {
               : `部分异常 (${activeErrorCount}/${monitoredCurrencies.length})`;
 
     return (
-        <div className="min-h-screen p-3 sm:p-4 md:p-8 max-w-7xl mx-auto">
+        <div 
+            className="min-h-screen p-3 sm:p-4 md:p-8 max-w-7xl mx-auto relative"
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+        >
+            {/* Pull to refresh indicator */}
+            <div 
+                className={`fixed top-0 left-0 right-0 flex justify-center items-center pointer-events-none z-50 transition-all duration-200 ${
+                    pullDistance > 0 || isRefreshing ? 'opacity-100' : 'opacity-0'
+                }`}
+                style={{ height: `${Math.max(pullDistance, isRefreshing ? 50 : 0)}px` }}
+            >
+                <div className="bg-blue-600 text-white px-4 py-1.5 rounded-full text-xs font-medium shadow-lg flex items-center gap-2 animate-bounce">
+                    <Clock className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                    {isRefreshing ? '正在刷新页面...' : pullDistance >= PULL_THRESHOLD ? '松开即可刷新' : '下拉刷新新功能'}
+                </div>
+            </div>
+
             <header className="mb-6 md:mb-8">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4 md:mb-6">
                     <div>
@@ -475,13 +531,13 @@ const App: React.FC = () => {
                                             currentRate={state.currentRates[activeChartConfig.currency] ?? null}
                                             previousRate={state.previousRates[activeChartConfig.currency] ?? null}
                                             currency={activeChartConfig.currency}
-                                            trendComparisonMinutes={state.config.trendComparisonMinutes}
+                                            trendComparisonMinutes={Number(state.config.trendComparisonMinutes)}
                                         />
                                         <RateChart
                                             history={state.historyByCurrency[activeChartConfig.currency] ?? []}
                                             currency={activeChartConfig.currency}
-                                            windowDays={state.config.calculationWindowDays}
-                                            targetRate={activeChartConfig.targetRate}
+                                            windowDays={Number(state.config.calculationWindowDays)}
+                                            targetRate={activeChartConfig.targetRate !== undefined ? Number(activeChartConfig.targetRate) : undefined}
                                             timezone={timezone}
                                         />
                                     </>
