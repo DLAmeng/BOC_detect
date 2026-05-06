@@ -838,7 +838,7 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
   if (currentRate <= effectiveBestZoneUpper) {
     state.firstLeaveTime = null; // 重置离开确认时间
     
-    if (!state.hasNotifiedBest || canNotify()) {
+    if (!state.hasNotifiedBest) {
       state.hasNotifiedBest = true;
       state.hasNotifiedGood = true;
       
@@ -860,7 +860,7 @@ const evaluateTargetAlerts = async (rateRecord, config, botToken, chatId) => {
       messages.push(buildMessage(`📈 [${rateRecord.currencyName}] 汇率小幅反弹`, '已从强烈区退回到适合区，仍可考虑分批换汇', false));
       state.lastNotifiedRate = currentRate;
       state.lastNotifiedTime = Date.now();
-    } else if (!state.hasNotifiedGood || canNotify()) {
+    } else if (!state.hasNotifiedGood) {
       state.hasNotifiedGood = true;
       
       messages.push(buildMessage(`✅ [${rateRecord.currencyName}] 进入适合换汇区`, '可考虑分批换汇', false));
