@@ -34,11 +34,20 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
 
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const { name, value, type } = e.target;
+        const { name, value, inputMode } = e.target;
+        
+        let processedValue: string | boolean = value;
+
+        // If it's a numeric input, sanitize the string
+        if (inputMode === 'numeric' || inputMode === 'decimal') {
+            processedValue = value.replace(/[^0-9.]/g, '');
+            // Only allow one dot
+            if (processedValue.split('.').length > 2) return;
+        }
 
         setLocalConfig((prev) => ({
             ...prev,
-            [name]: type === 'number' ? Number(value) : value
+            [name]: processedValue
         }));
 
         setIsDirty(true);
@@ -66,10 +75,13 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
     };
 
     const handleTargetRateChange = (currencyCode: string, value: string) => {
+        const sanitized = value.replace(/[^0-9.]/g, '');
+        if (sanitized.split('.').length > 2) return;
+
         setLocalConfig((prev) => ({
             ...prev,
             monitoredCurrencies: prev.monitoredCurrencies.map((item) =>
-                item.currency === currencyCode ? { ...item, targetRate: value === '' ? undefined : Number(value) } : item
+                item.currency === currencyCode ? { ...item, targetRate: sanitized === '' ? undefined : sanitized } : item
             )
         }));
         setIsDirty(true);
@@ -197,10 +209,10 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                                                         <Target className="h-3.5 w-3.5 text-gray-500" />
                                                     </div>
                                                     <input
-                                                        type="number"
-                                                        step="0.0001"
+                                                        type="text"
+                                                        inputMode="decimal"
                                                         placeholder="目标价 (如 4.65)"
-                                                        value={config.targetRate || ''}
+                                                        value={config.targetRate === undefined ? '' : config.targetRate}
                                                         onChange={(e) => handleTargetRateChange(currency.code, e.target.value)}
                                                         className="block w-full pl-9 pr-3 py-1.5 bg-gray-950 border border-gray-700 rounded-lg text-xs text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors"
                                                     />
@@ -219,9 +231,9 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                         <div>
                             <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">检查间隔 (秒)</label>
                             <input
-                                type="number"
+                                type="text"
+                                inputMode="numeric"
                                 name="checkIntervalSeconds"
-                                min="5"
                                 value={localConfig.checkIntervalSeconds}
                                 onChange={handleChange}
                                 className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
@@ -231,10 +243,9 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                         <div>
                             <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">计算窗口天数</label>
                             <input
-                                type="number"
+                                type="text"
+                                inputMode="numeric"
                                 name="calculationWindowDays"
-                                min="1"
-                                max="365"
                                 value={localConfig.calculationWindowDays}
                                 onChange={handleChange}
                                 className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
@@ -244,10 +255,9 @@ export const AdminPage: React.FC<Props> = ({ config, onSave }) => {
                         <div>
                             <label className="block text-xs md:text-sm font-medium text-gray-400 mb-1.5 md:mb-2">趋势对比跨度 (分钟)</label>
                             <input
-                                type="number"
+                                type="text"
+                                inputMode="numeric"
                                 name="trendComparisonMinutes"
-                                min="1"
-                                max="10080"
                                 value={localConfig.trendComparisonMinutes}
                                 onChange={handleChange}
                                 className="w-full bg-gray-950 border border-gray-700 rounded-lg py-2 md:py-2.5 px-3 md:px-4 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"

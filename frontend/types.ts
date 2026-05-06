@@ -26,14 +26,14 @@ export interface AlertLog {
 
 export interface MonitoredCurrencyConfig {
     currency: string;
-    targetRate?: number;
+    targetRate?: number | string;
 }
 
 export interface SystemConfig {
     monitoredCurrencies: MonitoredCurrencyConfig[];
-    checkIntervalSeconds: number;
-    calculationWindowDays: number;
-    trendComparisonMinutes: number;
+    checkIntervalSeconds: number | string;
+    calculationWindowDays: number | string;
+    trendComparisonMinutes: number | string;
     isRunning: boolean;
     webhookUrl: string;
     telegramBotToken: string;
