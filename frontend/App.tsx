@@ -283,7 +283,7 @@ const App: React.FC = () => {
 
         if (state.config.isRunning) {
             runCheck();
-            intervalId = window.setInterval(runCheck, state.config.checkIntervalSeconds * 1000);
+            intervalId = window.setInterval(runCheck, Number(state.config.checkIntervalSeconds) * 1000);
         }
 
         return () => {
